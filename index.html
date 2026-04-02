@@ -1,0 +1,33 @@
+// Arayüzdeki kritik fonksiyon güncellemeleri
+
+// 1. Mod Gönderimi (SET kanalına gönderir)
+function modGonder(mod) {
+  if (!client?.connected) { alert('MQTT bağlı değil!'); return; }
+  
+  // Topic ismi /set olarak güncellendi
+  client.publish(`${deviceId}/kombi/set`, mod, { retain: true });
+  
+  modGuncelleUI(mod);
+  log(`Komut Gönderildi: ${mod}`, 'ok');
+}
+
+// 2. MQTT Abonelikleri (Bağlantı anında)
+client.on('connect', () => {
+  log('Arayüz Bağlandı', 'ok');
+  client.subscribe(`${deviceId}/sicaklik`);
+  client.subscribe(`${deviceId}/heartbeat`);
+  client.subscribe(`${deviceId}/kombi/stat`); // Gerçek durumu buradan izle
+  client.subscribe(`${deviceId}/role/durum`);
+});
+
+// 3. Mesaj Karşılama
+client.on('message', (topic, message) => {
+  const mesaj = message.toString();
+  
+  if (topic.endsWith('/kombi/stat')) {
+    const el = document.getElementById('kombiDurum');
+    el.textContent = (mesaj === "1") ? 'AÇIK' : 'KAPALI';
+    el.className = 'kart-deger ' + (mesaj === "1" ? 'sicak' : 'yesil');
+  }
+  // ... diğer JSON parse işlemleri ...
+});
