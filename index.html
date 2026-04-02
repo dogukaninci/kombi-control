@@ -137,7 +137,7 @@
 <div class="mqtt-conf">
   <h2>MQTT Bağlantısı</h2>
   <input type="text"   id="mqttHost" value="broker.hivemq.com">
-  <input type="number" id="mqttPort" value="8000">
+  <input type="number" id="mqttPort" value="8884">
   <input type="text"   id="deviceId" value="silent-hearth-681">
   <button class="btn" onclick="baglan()">Bağlan</button>
   <span id="mqttDurum" style="margin-left:10px;font-size:0.8rem;color:#64748b">Bağlı değil</span>
@@ -445,7 +445,7 @@ function baglan() {
 
   if (client) { client.removeAllListeners(); client.end(true); client = null; }
 
-  const url = `ws://${host}:${port}/mqtt`;
+  const url = `wss://${host}:${port}/mqtt`;
   log(`Bağlanıyor: ${url}`);
   document.getElementById('mqttDurum').textContent = 'Bağlanıyor...';
   document.getElementById('mqttDurum').style.color = '#facc15';
