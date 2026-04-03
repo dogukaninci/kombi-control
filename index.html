@@ -7,11 +7,27 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 20px; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 20px;
+  }
   h1 { font-size: 1.4rem; font-weight: 500; margin-bottom: 20px; color: #94a3b8; }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 18px; }
-  .kart { background: #1e293b; border-radius: 12px; padding: 18px; border: 1px solid #334155; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+  .kart {
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 18px;
+    border: 1px solid #334155;
+  }
   .kart-baslik { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
   .kart-deger  { font-size: 1.9rem; font-weight: 600; line-height: 1; }
   .kart-alt    { font-size: 0.78rem; color: #64748b; margin-top: 6px; }
@@ -24,13 +40,19 @@
   .mor     { color: #a78bfa; }
   .mavi    { color: #60a5fa; }
 
-  /* Histerezis görsel bandı */
-  .band-wrap { position: relative; height: 48px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; margin-top: 10px; overflow: hidden; }
-  .band-arka { position: absolute; background: #1e3a5f; top: 0; bottom: 0; }
-  .band-mevcut { position: absolute; width: 3px; background: #f97316; top: 0; bottom: 0; transition: left 0.5s ease; }
-  .band-label { position: absolute; font-size: 0.65rem; color: #64748b; bottom: 2px; }
+  .duty-bar   { height: 6px; background: #334155; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .duty-dolgu { height: 100%; border-radius: 3px; background: #f97316; transition: width 0.6s ease; }
 
-  .durum-bar { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; display: flex; align-items: center; gap: 12px; }
+  .durum-bar {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: #4ade80; animation: pulse 2s infinite; flex-shrink: 0; }
   .dot.kirmizi-dot { background: #f87171; animation: none; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
@@ -39,7 +61,13 @@
   .panel h2 { font-size: 0.95rem; font-weight: 500; margin-bottom: 14px; color: #94a3b8; }
 
   .mod-grup { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-  .mod-btn { flex: 1; min-width: 110px; padding: 12px 10px; border-radius: 10px; border: 2px solid transparent; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 0.2s; text-align: center; }
+  .mod-btn {
+    flex: 1; min-width: 110px;
+    padding: 12px 10px; border-radius: 10px;
+    border: 2px solid transparent;
+    font-size: 0.88rem; font-weight: 600;
+    cursor: pointer; transition: all 0.2s; text-align: center;
+  }
   .mod-btn.auto  { background: #1e3a5f; color: #60a5fa; border-color: #1e3a5f; }
   .mod-btn.ac    { background: #431407; color: #f97316; border-color: #431407; }
   .mod-btn.kapat { background: #1a1a2e; color: #94a3b8; border-color: #1a1a2e; }
@@ -49,20 +77,47 @@
   .mod-btn:hover { opacity: 0.85; }
   .mod-aciklama { font-size: 0.78rem; color: #475569; margin-top: 8px; }
 
-  /* Min süre kilit uyarısı */
-  .kilid-badge { display:inline-block; background:#78350f; color:#fde68a; font-size:0.72rem; padding:2px 8px; border-radius:6px; margin-left:8px; }
-
   .ayar-satir { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .ayar-satir label { min-width: 160px; font-size: 0.83rem; color: #94a3b8; }
+
+  /* ---- Input: odaklandığında sarı kenarlık → "beni güncelleme" sinyali ---- */
   input[type=number], input[type=time], input[type=text] {
-    background: #0f172a; border: 1px solid #334155; border-radius: 8px;
-    color: #e2e8f0; padding: 7px 11px; font-size: 0.88rem; width: 110px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: #e2e8f0;
+    padding: 7px 11px;
+    font-size: 0.88rem;
+    width: 110px;
     transition: border-color 0.2s;
   }
-  input:focus { outline: none; border-color: #facc15; }
+  input:focus {
+    outline: none;
+    border-color: #facc15;  /* sarı = "kullanıcı düzenliyor, dokunma" */
+  }
 
-  button.btn { background: #3b82f6; color: white; border: none; border-radius: 8px; padding: 9px 18px; font-size: 0.88rem; cursor: pointer; transition: background 0.2s; }
+  /* Değeri ESP'den otomatik güncellenebilen inputlar için ikon */
+  .input-wrap { position: relative; display: inline-block; }
+  .input-wrap .otomatik-badge {
+    position: absolute;
+    right: -22px; top: 50%; transform: translateY(-50%);
+    font-size: 0.65rem;
+    color: #64748b;
+    white-space: nowrap;
+  }
+  .input-wrap.guncellendi .otomatik-badge { color: #4ade80; }
+
+  button.btn {
+    background: #3b82f6; color: white;
+    border: none; border-radius: 8px;
+    padding: 9px 18px; font-size: 0.88rem;
+    cursor: pointer; transition: background 0.2s;
+  }
   button.btn:hover { background: #2563eb; }
+
+  .pid-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .pid-input label { font-size: 0.78rem; color: #64748b; display: block; margin-bottom: 4px; }
+  .pid-input input { width: 100%; }
 
   .mqtt-conf { background: #1e293b; border: 1px solid #475569; border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; }
   .mqtt-conf h2 { font-size: 0.88rem; color: #94a3b8; margin-bottom: 10px; }
@@ -82,7 +137,7 @@
 <div class="mqtt-conf">
   <h2>MQTT Bağlantısı</h2>
   <input type="text"   id="mqttHost" value="broker.hivemq.com">
-  <input type="number" id="mqttPort" value="8000">
+  <input type="number" id="mqttPort" value="8884">
   <input type="text"   id="deviceId" value="silent-hearth-681">
   <button class="btn" onclick="baglan()">Bağlan</button>
   <span id="mqttDurum" style="margin-left:10px;font-size:0.8rem;color:#64748b">Bağlı değil</span>
@@ -94,7 +149,6 @@
   <span style="margin-left:auto;font-size:0.78rem;color:#475569" id="sonGuncelleme">—</span>
 </div>
 
-<!-- Kartlar -->
 <div class="grid">
   <div class="kart">
     <div class="kart-baslik">Sıcaklık</div>
@@ -107,14 +161,19 @@
     <div class="kart-alt">°C — ayarlanan</div>
   </div>
   <div class="kart">
+    <div class="kart-baslik">Eşikler</div>
+    <div class="kart-deger mavi" id="esikGoster" style="font-size:1.1rem">—</div>
+    <div class="kart-alt" id="esikAlt">aç → kapat °C</div>
+  </div>
+  <div class="kart">
+    <div class="kart-baslik">Nem</div>
+    <div class="kart-deger soguk" id="nem">—</div>
+    <div class="kart-alt">%</div>
+  </div>
+  <div class="kart">
     <div class="kart-baslik">Kombi</div>
     <div class="kart-deger" id="kombiDurum">—</div>
     <div class="kart-alt"   id="kombiAlt">—</div>
-  </div>
-  <div class="kart">
-    <div class="kart-baslik">Çalışma Süresi</div>
-    <div class="kart-deger mavi" id="calismaSure">—</div>
-    <div class="kart-alt"        id="calismaAlt">—</div>
   </div>
   <div class="kart">
     <div class="kart-baslik">Kapı</div>
@@ -127,34 +186,9 @@
     <div class="kart-alt"   id="roleAlt">—</div>
   </div>
   <div class="kart">
-    <div class="kart-baslik">Nem</div>
-    <div class="kart-deger soguk" id="nem">—</div>
-    <div class="kart-alt">%</div>
-  </div>
-  <div class="kart">
     <div class="kart-baslik">Batarya</div>
     <div class="kart-deger" id="batarya">—</div>
     <div class="kart-alt">%</div>
-  </div>
-</div>
-
-<!-- Histerezis band görselleştirmesi -->
-<div class="panel">
-  <h2>
-    🌡️ Histerezis Bandı
-    <span class="kilid-badge" id="kilidBadge" style="display:none">⏳ Min süre bekliyor</span>
-  </h2>
-  <div style="font-size:0.82rem;color:#64748b;margin-bottom:10px">
-    Mavi bant = konfor bölgesi &nbsp;|&nbsp;
-    Turuncu çizgi = mevcut sıcaklık &nbsp;|&nbsp;
-    Solda AÇ eşiği, sağda KAPAT eşiği
-  </div>
-  <div class="band-wrap" id="bandWrap">
-    <div class="band-arka"    id="bandArka"></div>
-    <div class="band-mevcut"  id="bandMevcut"></div>
-    <span class="band-label"  id="bandLabelAc"  style="left:4px">—</span>
-    <span class="band-label"  id="bandLabelKap" style="right:4px">—</span>
-    <span class="band-label"  id="bandLabelMev" style="left:50%;transform:translateX(-50%)">—</span>
   </div>
 </div>
 
@@ -163,7 +197,7 @@
   <h2>🎛️ Çalışma Modu</h2>
   <div class="mod-grup">
     <div class="mod-btn auto"  id="btnAuto"  onclick="modGonder('auto')">
-      🌡️ Otomatik<br><small style="font-weight:400;font-size:0.75rem">Histerezis kontrolü</small>
+      🌡️ Otomatik<br><small style="font-weight:400;font-size:0.75rem">Histerezis</small>
     </div>
     <div class="mod-btn ac"    id="btnAc"    onclick="modGonder('manual_on')">
       🔥 Manuel Aç<br><small style="font-weight:400;font-size:0.75rem">Sürekli ısıt</small>
@@ -177,35 +211,50 @@
 
 <!-- Histerezis ayarları -->
 <div class="panel">
-  <h2>⚙️ Termostat Ayarları</h2>
+  <h2>🌡️ Termostat Ayarları</h2>
 
   <div class="ayar-satir">
     <label>Hedef sıcaklık</label>
-    <input type="number" id="hedefSic" value="22" min="15" max="29" step="0.5"
-           onfocus="odakAlindi(this)" onblur="odakBirakti(this)"> °C
-    <button class="btn" onclick="hedefGonder()">Ayarla</button>
+    <div class="input-wrap" id="hedefWrap">
+      <input type="number" id="hedefSic" value="22" min="15" max="29" step="0.5"
+             onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)">
+      <span class="otomatik-badge" id="hedefBadge">↺ ESP</span>
+    </div>
+    °C
   </div>
 
   <div class="ayar-satir">
-    <label>Alt bant (açılma farkı)</label>
-    <input type="number" id="histAlt" value="0.5" min="0.1" max="3.0" step="0.1"
-           onfocus="odakAlindi(this)" onblur="odakBirakti(this)"> °C
-    <span style="font-size:0.78rem;color:#64748b" id="acEsikGoster">→ AÇ: —</span>
+    <label>Alt bant — açılma farkı</label>
+    <input type="number" id="histAlt" value="0.5" min="0.2" max="3.0" step="0.1"
+           onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"> °C
+    <span style="font-size:0.78rem;color:#64748b" id="acEsikLabel">→ AÇ: —</span>
   </div>
 
   <div class="ayar-satir">
-    <label>Üst bant (kapanma farkı)</label>
-    <input type="number" id="histUst" value="0.5" min="0.1" max="3.0" step="0.1"
-           onfocus="odakAlindi(this)" onblur="odakBirakti(this)"> °C
-    <span style="font-size:0.78rem;color:#64748b" id="kapEsikGoster">→ KAPAT: —</span>
+    <label>Üst bant — kapanma farkı</label>
+    <input type="number" id="histUst" value="0.2" min="0.0" max="2.9" step="0.1"
+           onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"> °C
+    <span style="font-size:0.78rem;color:#64748b" id="kapEsikLabel">→ KAPAT: —</span>
   </div>
 
-  <div style="font-size:0.78rem;color:#475569;margin:10px 0 12px">
-    ℹ️ Min çalışma: <b>8 dk</b> &nbsp;|&nbsp; Min bekleme: <b>3 dk</b>
-    &nbsp;(short cycling koruması — kodda sabittir)
+  <div style="font-size:0.78rem;color:#475569;margin:8px 0 12px">
+    ℹ️ Min çalışma: <b>8 dk</b> &nbsp;|&nbsp; Min bekleme: <b>3 dk</b> &nbsp;(short cycling koruması)
+    <span id="kilidBadge" style="display:none;margin-left:8px;background:#78350f;color:#fde68a;font-size:0.72rem;padding:2px 8px;border-radius:6px">⏳ Min süre bekliyor</span>
   </div>
 
   <button class="btn" onclick="histGonder()">💾 Kaydet</button>
+</div>
+
+
+
+<!-- 24 saatlik grafik -->
+<div class="panel" id="grafikPanel">
+  <h2>📈 Son 24 Saat — Sıcaklık & Kombi</h2>
+  <div style="display:flex;gap:18px;align-items:center;margin-bottom:10px;font-size:0.78rem;color:#64748b;">
+    <span><span style="display:inline-block;width:14px;height:3px;background:#38bdf8;vertical-align:middle;border-radius:2px;margin-right:4px"></span>Sıcaklık (°C)</span>
+    <span><span style="display:inline-block;width:14px;height:10px;background:rgba(249,115,22,0.35);vertical-align:middle;border-radius:2px;margin-right:4px"></span>Kombi açık</span>
+  </div>
+  <canvas id="grafik" style="display:block;width:100%;border-radius:8px;"></canvas>
 </div>
 
 <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px">Canlı log</div>
@@ -214,23 +263,152 @@
 <script>
 let client   = null;
 let deviceId = 'silent-hearth-681';
-const odakSet = new Set();
 
-// Son bilinen değerler
-let sonAcEsik  = 21.5;
-let sonKapEsik = 22.5;
-let sonHedef   = 22.0;
-let sonT       = 22.0;
+// ---- 24 saatlik geçmiş ----
+// Her nokta: { ts: timestamp_ms, t: sıcaklık, kombi: bool }
+const MAX_NOKTA = 2880; // 24 saat @ 30sn aralık
+let gecmis = [];
 
-function odakAlindi(el)  { odakSet.add(el.id); }
-function odakBirakti(el) { odakSet.delete(el.id); }
-function guvenliYaz(id, val) {
-  if (!odakSet.has(id)) {
-    const el = document.getElementById(id);
-    if (el) el.value = val;
-  }
+function gecmisEkle(t, kombi) {
+  gecmis.push({ ts: Date.now(), t, kombi });
+  if (gecmis.length > MAX_NOKTA) gecmis.shift();
+  grafikCiz();
 }
 
+// ---- Canvas grafik ----
+function grafikCiz() {
+  const canvas = document.getElementById('grafik');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const PAD = { top: 10, right: 12, bottom: 28, left: 38 };
+  const gW = W - PAD.left - PAD.right;
+  const gH = H - PAD.top - PAD.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Arka plan
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  if (gecmis.length < 2) {
+    ctx.fillStyle = '#475569';
+    ctx.font = '13px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('Veri bekleniyor...', W / 2, H / 2);
+    return;
+  }
+
+  const simdi = Date.now();
+  const baslangic = simdi - 24 * 3600 * 1000;
+  const gorunen = gecmis.filter(d => d.ts >= baslangic);
+  if (gorunen.length < 2) return;
+
+  // Sıcaklık min/max
+  const tDegerler = gorunen.map(d => d.t);
+  let tMin = Math.min(...tDegerler) - 1;
+  let tMax = Math.max(...tDegerler) + 1;
+  tMin = Math.floor(tMin);
+  tMax = Math.ceil(tMax);
+  const tAralik = tMax - tMin || 1;
+
+  function xPos(ts) { return PAD.left + ((ts - baslangic) / (24 * 3600 * 1000)) * gW; }
+  function yPos(t)  { return PAD.top + (1 - (t - tMin) / tAralik) * gH; }
+
+  // ---- Kombi açık bantları (arka plan) ----
+  ctx.fillStyle = 'rgba(249,115,22,0.13)';
+  let bantBaslangic = null;
+  for (let i = 0; i < gorunen.length; i++) {
+    const d = gorunen[i];
+    if (d.kombi && bantBaslangic === null) bantBaslangic = d.ts;
+    if (!d.kombi && bantBaslangic !== null) {
+      const x1 = xPos(bantBaslangic);
+      const x2 = xPos(d.ts);
+      ctx.fillRect(x1, PAD.top, x2 - x1, gH);
+      bantBaslangic = null;
+    }
+  }
+  if (bantBaslangic !== null) {
+    ctx.fillRect(xPos(bantBaslangic), PAD.top, xPos(simdi) - xPos(bantBaslangic), gH);
+  }
+
+  // ---- Grid yatay çizgiler + Y ekseni etiket ----
+  const adim = tAralik <= 6 ? 1 : tAralik <= 12 ? 2 : 5;
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#475569';
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'right';
+  for (let t = tMin; t <= tMax; t += adim) {
+    const y = yPos(t);
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + gW, y); ctx.stroke();
+    ctx.fillText(t + '°', PAD.left - 4, y + 3);
+  }
+
+  // ---- Grid dikey + X ekseni etiket (her 4 saat) ----
+  ctx.textAlign = 'center';
+  for (let h = 0; h <= 24; h += 4) {
+    const ts = baslangic + h * 3600 * 1000;
+    const x  = xPos(ts);
+    ctx.strokeStyle = '#1e293b';
+    ctx.beginPath(); ctx.moveTo(x, PAD.top); ctx.lineTo(x, PAD.top + gH); ctx.stroke();
+    const etiket = new Date(ts).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    ctx.fillStyle = '#475569';
+    ctx.fillText(etiket, x, H - 6);
+  }
+
+  // ---- Sıcaklık eğrisi ----
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  gorunen.forEach((d, i) => {
+    const x = xPos(d.ts), y = yPos(d.t);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // ---- Son nokta vurgusu ----
+  const son = gorunen[gorunen.length - 1];
+  ctx.fillStyle = '#38bdf8';
+  ctx.beginPath();
+  ctx.arc(xPos(son.ts), yPos(son.t), 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ---- Grafik çerçevesi ----
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(PAD.left, PAD.top, gW, gH);
+}
+
+// Canvas responsive yeniden çiz
+function grafikYeniden() {
+  const canvas = document.getElementById('grafik');
+  if (!canvas) return;
+  canvas.width = canvas.parentElement.clientWidth - 32;
+  grafikCiz();
+}
+window.addEventListener('resize', grafikYeniden);
+
+// ---- Odak yönetimi — ESP güncellemesinden korunan inputlar ----
+// Bir input focus aldığında buraya eklenir, blur'da çıkar.
+const odaklanmisInputlar = new Set();
+
+function inputOdakAlindi(el) {
+  odaklanmisInputlar.add(el.id);
+}
+function inputOdakBirakti(el) {
+  odaklanmisInputlar.delete(el.id);
+}
+
+// ESP'den gelen değeri input'a yaz — odaklanmışsa yaz
+function guvenliYaz(id, deger) {
+  if (odaklanmisInputlar.has(id)) return;  // kullanıcı düzenliyorsa dokunma
+  const el = document.getElementById(id);
+  if (el) el.value = deger;
+}
+
+// ---- Log ----
 function log(mesaj, tip = '') {
   const alan  = document.getElementById('logAlan');
   const zaman = new Date().toLocaleTimeString('tr-TR');
@@ -241,60 +419,19 @@ function log(mesaj, tip = '') {
   if (alan.children.length > 150) alan.removeChild(alan.lastChild);
 }
 
-// ---- Histerezis band görseli ----
-function bandGuncelle(t, acEsik, kapEsik) {
-  const wrap  = document.getElementById('bandWrap');
-  if (!wrap) return;
-  const W = wrap.offsetWidth || 280;
-
-  // Görüntüleme aralığı: eşiklerden ±1°C genişlet
-  const gorMin = acEsik  - 1.0;
-  const gorMax = kapEsik + 1.0;
-  const aralik = gorMax - gorMin;
-
-  // Bant px pozisyonları
-  const acPx  = ((acEsik  - gorMin) / aralik) * W;
-  const kapPx = ((kapEsik - gorMin) / aralik) * W;
-  const tPx   = Math.max(2, Math.min(W - 3, ((t - gorMin) / aralik) * W));
-
-  const arka = document.getElementById('bandArka');
-  arka.style.left  = acPx + 'px';
-  arka.style.width = (kapPx - acPx) + 'px';
-
-  document.getElementById('bandMevcut').style.left = tPx + 'px';
-
-  document.getElementById('bandLabelAc').textContent  = acEsik.toFixed(1) + '°C';
-  document.getElementById('bandLabelKap').textContent = kapEsik.toFixed(1) + '°C';
-  document.getElementById('bandLabelMev').textContent = t.toFixed(1) + '°C';
-  document.getElementById('bandLabelMev').style.left  = tPx + 'px';
-}
-
-// Eşik gösterge güncelle
-function esikGosterGuncelle() {
-  const hedef  = parseFloat(document.getElementById('hedefSic').value) || sonHedef;
-  const alt    = parseFloat(document.getElementById('histAlt').value)  || 0.5;
-  const ust    = parseFloat(document.getElementById('histUst').value)  || 0.5;
-  document.getElementById('acEsikGoster').textContent  = `→ AÇ: ${(hedef-alt).toFixed(1)}°C`;
-  document.getElementById('kapEsikGoster').textContent = `→ KAPAT: ${(hedef+ust).toFixed(1)}°C`;
-}
-document.getElementById('hedefSic').addEventListener('input', esikGosterGuncelle);
-document.getElementById('histAlt').addEventListener('input',  esikGosterGuncelle);
-document.getElementById('histUst').addEventListener('input',  esikGosterGuncelle);
-
 // ---- Mod UI ----
 function modGuncelleUI(mod) {
-  ['btnAuto','btnAc','btnKapat'].forEach(id => document.getElementById(id).classList.remove('aktif'));
-  const m = { auto:'btnAuto', manual_on:'btnAc', manual_off:'btnKapat' };
-  if (m[mod]) document.getElementById(m[mod]).classList.add('aktif');
-  const a = {
-    auto:       '🌡️ Otomatik — histerezis bandı ile açıp kapıyor',
-    manual_on:  '🔥 Manuel AÇIK — kapı/heartbeat güvenliği hâlâ aktif',
-    manual_off: '❄️ Manuel KAPALI — ısıtma durduruldu'
-  };
-  document.getElementById('modAciklama').textContent = a[mod] || mod;
+  ['btnAuto','btnAc','btnKapat'].forEach(id =>
+    document.getElementById(id).classList.remove('aktif')
+  );
+  const map = { auto: 'btnAuto', manual_on: 'btnAc', manual_off: 'btnKapat' };
+  if (map[mod]) document.getElementById(map[mod]).classList.add('aktif');
+
+  const ac = { auto: '🌡️ Otomatik — histerezis bandı ile açıp kapıyor', manual_on: '🔥 Manuel AÇIK — kapı açılırsa yine kapanır', manual_off: '❄️ Manuel KAPALI — ısıtma durduruldu' };
+  document.getElementById('modAciklama').textContent = ac[mod] || 'Mod: ' + mod;
 }
 
-// ---- MQTT ----
+// ---- MQTT bağlan ----
 function baglan() {
   const host = document.getElementById('mqttHost').value.trim();
   const port  = parseInt(document.getElementById('mqttPort').value);
@@ -302,13 +439,13 @@ function baglan() {
 
   if (client) { client.removeAllListeners(); client.end(true); client = null; }
 
-  const url = `ws://${host}:${port}/mqtt`;
+  const url = `wss://${host}:${port}/mqtt`;
   log(`Bağlanıyor: ${url}`);
   document.getElementById('mqttDurum').textContent = 'Bağlanıyor...';
   document.getElementById('mqttDurum').style.color = '#facc15';
 
   client = mqtt.connect(url, {
-    clientId: 'webdash-' + Math.random().toString(16).substr(2,8),
+    clientId: 'webdash-' + Math.random().toString(16).substr(2, 8),
     keepalive: 30, reconnectPeriod: 5000
   });
 
@@ -316,7 +453,7 @@ function baglan() {
     document.getElementById('mqttDurum').textContent = 'Bağlandı ✓';
     document.getElementById('mqttDurum').style.color = '#4ade80';
     document.getElementById('baglantiDot').className  = 'dot';
-    document.getElementById('baglantiMetin').textContent = 'MQTT aktif';
+    document.getElementById('baglantiMetin').textContent = 'MQTT bağlantısı aktif';
     log('MQTT bağlandı', 'ok');
     client.subscribe(`${deviceId}/sicaklik`);
     client.subscribe(`${deviceId}/heartbeat`);
@@ -326,154 +463,144 @@ function baglan() {
   client.on('message', (topic, message) => {
     const mesaj = message.toString();
     try {
-      const d = JSON.parse(mesaj);
+      const data = JSON.parse(mesaj);
 
       // ---- Sıcaklık paketi ----
       if (topic.endsWith('/sicaklik')) {
-        if (d.t !== undefined) {
-          sonT = d.t;
+
+        if (data.t !== undefined) {
           const el = document.getElementById('sicaklik');
-          el.textContent = d.t.toFixed(1);
-          el.className   = 'kart-deger ' + (d.kombi ? 'sicak' : 'soguk');
+          el.textContent = data.t.toFixed(1);
+          el.className   = 'kart-deger ' + (data.t > (data.hedef || 22) ? 'sicak' : 'soguk');
         }
-        if (d.h   !== undefined) document.getElementById('nem').textContent = d.h.toFixed(0);
-        if (d.bat !== undefined) {
-          const el = document.getElementById('batarya');
-          el.textContent = d.bat;
-          el.className   = 'kart-deger ' + (d.bat<15?'kirmizi':d.bat<40?'sari':'yesil');
-        }
+        if (data.h !== undefined)
+          document.getElementById('nem').textContent = data.h.toFixed(0);
 
-        // Hedef & histerezis — odak korumalı
-        if (d.hedef   !== undefined) {
-          sonHedef = d.hedef;
-          document.getElementById('hedefGoster').textContent = d.hedef.toFixed(1);
-          guvenliYaz('hedefSic', d.hedef.toFixed(1));
-        }
-        if (d.hist_alt !== undefined) guvenliYaz('histAlt', d.hist_alt.toFixed(1));
-        if (d.hist_ust !== undefined) guvenliYaz('histUst', d.hist_ust.toFixed(1));
-
-        // Eşikler
-        if (d.ac_esik  !== undefined) sonAcEsik  = d.ac_esik;
-        if (d.kap_esik !== undefined) sonKapEsik = d.kap_esik;
-        esikGosterGuncelle();
-        bandGuncelle(sonT, sonAcEsik, sonKapEsik);
-
-        // Kombi
-        if (d.kombi !== undefined) {
-          const el = document.getElementById('kombiDurum');
-          el.textContent = d.kombi ? 'AÇIK' : 'KAPALI';
-          el.className   = 'kart-deger ' + (d.kombi ? 'sicak' : 'yesil');
-          document.getElementById('kombiAlt').textContent =
-            d.kombi ? '🔥 Isıtıyor' : '✓ Beklemede';
+        // Hedef — sadece odaklanmamışsa güncelle
+        if (data.hedef !== undefined) {
+          document.getElementById('hedefGoster').textContent = data.hedef.toFixed(1);
+          guvenliYaz('hedefSic', data.hedef.toFixed(1));
         }
 
-        // Çalışma süresi
-        const el2 = document.getElementById('calismaSure');
-        if (d.kombi && d.acik_dk !== undefined && d.acik_dk > 0) {
-          el2.textContent = d.acik_dk.toFixed(1);
-          el2.className   = 'kart-deger sicak';
-          document.getElementById('calismaAlt').textContent = 'dk — çalışıyor';
-        } else if (!d.kombi && d.kapali_dk !== undefined && d.kapali_dk > 0) {
-          el2.textContent = d.kapali_dk.toFixed(1);
-          el2.className   = 'kart-deger soguk';
-          document.getElementById('calismaAlt').textContent = 'dk — beklemede';
-        }
-
-        // Kapı
-        if (d.kapi !== undefined) {
-          const el = document.getElementById('kapiDurum');
-          el.textContent = d.kapi ? 'AÇIK' : 'Kapalı';
-          el.className   = 'kart-deger ' + (d.kapi ? 'sari' : 'yesil');
-          document.getElementById('kapiAlt').textContent =
-            d.kapi ? '⚠️ Kombi durdu' : '✓ Normal';
+        // Histerezis eşikleri
+        if (data.hist_alt !== undefined) guvenliYaz('histAlt', data.hist_alt.toFixed(1));
+        if (data.hist_ust !== undefined) guvenliYaz('histUst', data.hist_ust.toFixed(1));
+        if (data.ac_esik !== undefined && data.kap_esik !== undefined) {
+          document.getElementById('esikGoster').textContent =
+            data.ac_esik.toFixed(1) + ' › ' + data.kap_esik.toFixed(1);
+          document.getElementById('esikAlt').textContent = 'aç › kapat °C';
+          document.getElementById('acEsikLabel').textContent  = '→ AÇ: '    + data.ac_esik.toFixed(1)  + '°C';
+          document.getElementById('kapEsikLabel').textContent = '→ KAPAT: ' + data.kap_esik.toFixed(1) + '°C';
         }
 
         // Min süre kilidi
         const kilid = document.getElementById('kilidBadge');
-        kilid.style.display = d.min_sure_kilidi ? 'inline-block' : 'none';
+        if (kilid) kilid.style.display = data.min_sure_kilidi ? 'inline-block' : 'none';
 
-        if (d.mod) modGuncelleUI(d.mod);
+        if (data.kombi !== undefined) {
+          const el = document.getElementById('kombiDurum');
+          el.textContent = data.kombi ? 'AÇIK' : 'KAPALI';
+          el.className   = 'kart-deger ' + (data.kombi ? 'sicak' : 'yesil');
+          document.getElementById('kombiAlt').textContent = data.kombi ? '🔥 Isıtıyor' : '✓ Beklemede';
+        }
+
+        if (data.kapi !== undefined) {
+          const el = document.getElementById('kapiDurum');
+          el.textContent = data.kapi ? 'AÇIK' : 'Kapalı';
+          el.className   = 'kart-deger ' + (data.kapi ? 'sari' : 'yesil');
+          document.getElementById('kapiAlt').textContent = data.kapi ? '⚠️ Kombi durdu' : '✓ Normal';
+        }
+
+        if (data.bat !== undefined) {
+          const el = document.getElementById('batarya');
+          el.textContent = data.bat;
+          el.className   = 'kart-deger ' + (data.bat < 15 ? 'kirmizi' : data.bat < 40 ? 'sari' : 'yesil');
+        }
+
+        if (data.mod) modGuncelleUI(data.mod);
+
+        // 24 saatlik geçmişe ekle
+        if (data.t !== undefined && data.kombi !== undefined) {
+          gecmisEkle(data.t, data.kombi);
+        }
 
         document.getElementById('sonGuncelleme').textContent =
           'Son: ' + new Date().toLocaleTimeString('tr-TR');
 
         log(
-          `T:${d.t?.toFixed(1)}°C  [${sonAcEsik.toFixed(1)}-${sonKapEsik.toFixed(1)}]` +
-          `  Kombi:${d.kombi?'AÇIK':'KAPALI'}` +
-          `  Kapı:${d.kapi?'⚠️AÇIK':'OK'}` +
-          `  Mod:${d.mod||'?'}` +
-          (d.min_sure_kilidi ? '  ⏳MinSure' : '')
+          `T:${data.t?.toFixed(1)}°C  [${data.ac_esik?.toFixed(1)}>${data.kap_esik?.toFixed(1)}]` +
+          `  Kombi:${data.kombi?'AÇIK':'KAPALI'}` +
+          `  Kapı:${data.kapi?'⚠️AÇIK':'OK'}` +
+          `  Mod:${data.mod||'?'}` +
+          (data.min_sure_kilidi ? '  ⏳MinSure' : '')
         );
       }
 
-      // ---- Heartbeat ----
       if (topic.endsWith('/heartbeat')) {
+        const alive = data.alive;
         document.getElementById('baglantiDot').className =
-          'dot' + (d.alive ? '' : ' kirmizi-dot');
+          'dot' + (alive ? '' : ' kirmizi-dot');
         document.getElementById('baglantiMetin').textContent =
-          d.alive ? 'Cihaz aktif' : '⚠️ Cihaz offline!';
-        if (!d.alive) log('Sıcaklık cihazı offline!', 'hata');
+          alive ? 'Cihaz aktif' : '⚠️ Cihaz offline!';
+        if (!alive) log('Sıcaklık cihazı offline!', 'hata');
       }
 
-      // ---- Röle durumu ----
       if (topic.endsWith('/role/durum')) {
-        if (d.role !== undefined) {
+        if (data.role !== undefined) {
           const el = document.getElementById('roleDurum');
-          el.textContent = d.role ? 'AÇIK' : 'KAPALI';
-          el.className   = 'kart-deger ' + (d.role ? 'sicak' : 'yesil');
-          document.getElementById('roleAlt').textContent =
-            d.neden ? `↳ ${d.neden}` : '—';
+          el.textContent = data.role ? 'AÇIK' : 'KAPALI';
+          el.className   = 'kart-deger ' + (data.role ? 'sicak' : 'yesil');
+          document.getElementById('roleAlt').textContent = data.neden ? `↳ ${data.neden}` : '—';
         }
         log(
-          `Röle:${d.role?'AÇIK':'KAPALI'} | ${d.neden||''} | Güvenli:${d.guvenli?'evet':'⚠️HAYIR'}`,
-          d.guvenli ? '' : 'uyari'
+          `Röle:${data.role?'AÇIK':'KAPALI'} | ${data.neden||''} | Güvenli:${data.guvenli?'evet':'⚠️HAYIR'}`,
+          data.guvenli ? '' : 'uyari'
         );
       }
 
-    } catch(e) {
+    } catch (e) {
       log(`Parse hatası [${topic}]: ${mesaj}`, 'hata');
     }
   });
 
-  client.on('error',  err => { log('Hata: ' + err.message, 'hata'); });
+  client.on('error',  (err) => { log('Bağlantı hatası: ' + err.message, 'hata'); });
   client.on('close', () => {
     document.getElementById('baglantiDot').className  = 'dot kirmizi-dot';
-    document.getElementById('baglantiMetin').textContent = 'Kesildi, yeniden deneniyor...';
+    document.getElementById('baglantiMetin').textContent = 'Bağlantı kesildi, yeniden deneniyor...';
     log('MQTT bağlantısı kesildi', 'uyari');
   });
 }
 
-// ---- Gönderme fonksiyonları ----
+// ---- Mod gönder ----
 function modGonder(mod) {
   if (!client?.connected) { alert('MQTT bağlı değil!'); return; }
-  const etiket = { auto:'Otomatik', manual_on:'Manuel Aç', manual_off:'Manuel Kapat' };
+  const etiket = { auto: 'Otomatik', manual_on: 'Manuel Aç', manual_off: 'Manuel Kapat' };
   if (!confirm(`"${etiket[mod]}" moduna geçilsin mi?`)) return;
   client.publish(`${deviceId}/kombi/cmd`, mod, { retain: true });
   modGuncelleUI(mod);
-  log('Mod: ' + mod, 'ok');
+  log(`Mod: ${mod}`, 'ok');
 }
 
-function hedefGonder() {
-  if (!client?.connected) { alert('MQTT bağlı değil!'); return; }
-  const hedef = parseFloat(document.getElementById('hedefSic').value);
-  if (hedef < 15 || hedef > 29) { alert('15–29°C arası olmalı!'); return; }
-  client.publish(`${deviceId}/ayarlar`, JSON.stringify({ hedef_sic: hedef }));
-  log(`Hedef → ${hedef}°C`, 'ok');
-}
-
+// ---- Histerezis ayarları gönder ----
 function histGonder() {
   if (!client?.connected) { alert('MQTT bağlı değil!'); return; }
   const hedef = parseFloat(document.getElementById('hedefSic').value);
   const alt   = parseFloat(document.getElementById('histAlt').value);
   const ust   = parseFloat(document.getElementById('histUst').value);
-  if (alt < 0.1 || alt > 3) { alert('Alt bant 0.1–3.0°C arası!'); return; }
-  if (ust < 0.1 || ust > 3) { alert('Üst bant 0.1–3.0°C arası!'); return; }
+  if (hedef < 15 || hedef > 29) { alert('Hedef 15–29°C arası olmalı!'); return; }
+  if (alt <= ust) { alert('Alt bant, üst banttan büyük olmalı!\nÖrn: alt=0.5, üst=0.2'); return; }
   const ayar = { hedef_sic: hedef, hist_alt: alt, hist_ust: ust };
   client.publish(`${deviceId}/ayarlar`, JSON.stringify(ayar));
-  log(`Histerezis → AÇ:${(hedef-alt).toFixed(1)}°C  KAPAT:${(hedef+ust).toFixed(1)}°C`, 'ok');
+  log(`Histerezis → Hedef:${hedef}°C  AÇ:${(hedef-alt).toFixed(1)}°C  KAPAT:${(hedef-ust).toFixed(1)}°C`, 'ok');
 }
 
-window.onload = () => baglan();
+// ---- Hedef gönder (geriye uyumluluk) ----
+function hedefGonder() { histGonder(); }
+function pidGonder()   { histGonder(); }
+
+
+
+window.onload = () => { grafikYeniden(); baglan(); }
 </script>
 </body>
 </html>
