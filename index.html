@@ -123,6 +123,26 @@
   .mqtt-conf h2 { font-size: 0.88rem; color: #94a3b8; margin-bottom: 10px; }
   .mqtt-conf input { width: 100%; margin-bottom: 7px; }
 
+  .cihaz-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .cihaz-kart {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .cihaz-kart .dot { margin: 0; }
+  .cihaz-kart .cihaz-ad { font-size: 0.82rem; color: #94a3b8; flex: 1; }
+  .cihaz-kart .cihaz-sure { font-size: 0.72rem; color: #475569; }
+  .cihaz-kart .cihaz-detay { font-size: 0.72rem; color: #64748b; margin-top: 2px; }
+
   .log { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 14px; font-family: monospace; font-size: 0.78rem; height: 200px; overflow-y: auto; color: #94a3b8; }
   .log-satir          { margin-bottom: 3px; }
   .log-satir.uyari    { color: #facc15; }
@@ -149,7 +169,24 @@
   <span style="margin-left:auto;font-size:0.78rem;color:#475569" id="sonGuncelleme">—</span>
 </div>
 
-<div class="grid">
+<div class="cihaz-bar">
+  <div class="cihaz-kart" id="sicaklikEsp">
+    <div class="dot kirmizi-dot" id="sicaklikEspDot"></div>
+    <div>
+      <div class="cihaz-ad">🌡️ Sıcaklık ESP</div>
+      <div class="cihaz-detay" id="sicaklikEspDetay">Bekleniyor...</div>
+    </div>
+    <div class="cihaz-sure" id="sicaklikEspSure">—</div>
+  </div>
+  <div class="cihaz-kart" id="roleEsp">
+    <div class="dot kirmizi-dot" id="roleEspDot"></div>
+    <div>
+      <div class="cihaz-ad">⚡ Röle ESP</div>
+      <div class="cihaz-detay" id="roleEspDetay">Bekleniyor...</div>
+    </div>
+    <div class="cihaz-sure" id="roleEspSure">—</div>
+  </div>
+</div>
   <div class="kart">
     <div class="kart-baslik">Sıcaklık</div>
     <div class="kart-deger sicak" id="sicaklik">—</div>
@@ -217,7 +254,8 @@
     <label>Hedef sıcaklık</label>
     <div class="input-wrap" id="hedefWrap">
       <input type="number" id="hedefSic" value="22" min="15" max="29" step="0.5"
-             onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)">
+             onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"
+             oninput="esikEtiketGuncelle()">
       <span class="otomatik-badge" id="hedefBadge">↺ ESP</span>
     </div>
     °C
@@ -226,19 +264,41 @@
   <div class="ayar-satir">
     <label>Alt bant — açılma farkı</label>
     <input type="number" id="histAlt" value="0.5" min="0.2" max="3.0" step="0.1"
-           onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"> °C
+           onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"
+           oninput="esikEtiketGuncelle()"> °C
     <span style="font-size:0.78rem;color:#64748b" id="acEsikLabel">→ AÇ: —</span>
   </div>
 
   <div class="ayar-satir">
     <label>Üst bant — kapanma farkı</label>
     <input type="number" id="histUst" value="0.2" min="0.0" max="2.9" step="0.1"
-           onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"> °C
+           onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)"
+           oninput="esikEtiketGuncelle()"> °C
     <span style="font-size:0.78rem;color:#64748b" id="kapEsikLabel">→ KAPAT: —</span>
   </div>
 
+  <div class="ayar-satir">
+    <label>Min açık kalma süresi</label>
+    <div class="input-wrap">
+      <input type="number" id="minAcikDk" value="8" min="1" max="60" step="1"
+             onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)">
+      <span class="otomatik-badge" id="minAcikBadge">↺ ESP</span>
+    </div>
+    dk
+  </div>
+
+  <div class="ayar-satir">
+    <label>Min kapalı kalma süresi</label>
+    <div class="input-wrap">
+      <input type="number" id="minKapaliDk" value="3" min="1" max="30" step="1"
+             onfocus="inputOdakAlindi(this)" onblur="inputOdakBirakti(this)">
+      <span class="otomatik-badge" id="minKapaliBadge">↺ ESP</span>
+    </div>
+    dk
+  </div>
+
   <div style="font-size:0.78rem;color:#475569;margin:8px 0 12px">
-    ℹ️ Min çalışma: <b>8 dk</b> &nbsp;|&nbsp; Min bekleme: <b>3 dk</b> &nbsp;(short cycling koruması)
+    ℹ️ Short cycling koruması — min açık/kapalı süreler EEPROM'a kaydedilir
     <span id="kilidBadge" style="display:none;margin-left:8px;background:#78350f;color:#fde68a;font-size:0.72rem;padding:2px 8px;border-radius:6px">⏳ Min süre bekliyor</span>
   </div>
 
@@ -253,6 +313,8 @@
   <div style="display:flex;gap:18px;align-items:center;margin-bottom:10px;font-size:0.78rem;color:#64748b;">
     <span><span style="display:inline-block;width:14px;height:3px;background:#38bdf8;vertical-align:middle;border-radius:2px;margin-right:4px"></span>Sıcaklık (°C)</span>
     <span><span style="display:inline-block;width:14px;height:10px;background:rgba(249,115,22,0.35);vertical-align:middle;border-radius:2px;margin-right:4px"></span>Kombi açık</span>
+    <span style="margin-left:auto" id="grafikNoktaSayisi">— nokta</span>
+    <button onclick="gecmisSifirla()" style="background:none;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:0.72rem;padding:3px 8px;cursor:pointer">🗑 Temizle</button>
   </div>
   <canvas id="grafik" style="display:block;width:100%;border-radius:8px;"></canvas>
 </div>
@@ -264,16 +326,85 @@
 let client   = null;
 let deviceId = 'silent-hearth-681';
 
-// ---- 24 saatlik geçmiş ----
+// ---- Cihaz durum takibi ----
+const cihazlar = {
+  sicaklik: { sonGoren: 0, online: false },
+  role:     { sonGoren: 0, online: false }
+};
+const CIHAZ_TIMEOUT = 35000; // 35 sn — heartbeat 15 sn, biraz tolerans
+
+function cihazDurumGuncelle(cihaz, detay) {
+  cihazlar[cihaz].sonGoren = Date.now();
+  cihazlar[cihaz].online   = true;
+  const dotEl    = document.getElementById(cihaz === 'sicaklik' ? 'sicaklikEspDot' : 'roleEspDot');
+  const detayEl  = document.getElementById(cihaz === 'sicaklik' ? 'sicaklikEspDetay' : 'roleEspDetay');
+  const sureEl   = document.getElementById(cihaz === 'sicaklik' ? 'sicaklikEspSure' : 'roleEspSure');
+  if (dotEl)   dotEl.className = 'dot';
+  if (detayEl && detay) detayEl.textContent = detay;
+  if (sureEl)  sureEl.textContent = 'az önce';
+}
+
+function cihazSurelerGuncelle() {
+  const simdi = Date.now();
+  ['sicaklik', 'role'].forEach(c => {
+    const sureEl  = document.getElementById(c === 'sicaklik' ? 'sicaklikEspSure' : 'roleEspSure');
+    const dotEl   = document.getElementById(c === 'sicaklik' ? 'sicaklikEspDot'  : 'roleEspDot');
+    const detayEl = document.getElementById(c === 'sicaklik' ? 'sicaklikEspDetay': 'roleEspDetay');
+    if (!cihazlar[c].sonGoren) return;
+    const gecen = simdi - cihazlar[c].sonGoren;
+    if (gecen > CIHAZ_TIMEOUT && cihazlar[c].online) {
+      cihazlar[c].online = false;
+      if (dotEl)   dotEl.className = 'dot kirmizi-dot';
+      if (detayEl) detayEl.textContent = '⚠️ Sinyal yok!';
+    }
+    if (sureEl) {
+      if      (gecen < 60000)  sureEl.textContent = Math.round(gecen/1000) + 'sn önce';
+      else if (gecen < 3600000) sureEl.textContent = Math.round(gecen/60000) + 'dk önce';
+      else                     sureEl.textContent = Math.round(gecen/3600000) + 'sa önce';
+    }
+  });
+}
+setInterval(cihazSurelerGuncelle, 5000);
+
+// ---- 24 saatlik geçmiş — localStorage ile kalıcı ----
 // Her nokta: { ts: timestamp_ms, t: sıcaklık, kombi: bool }
-const MAX_NOKTA = 2880; // 24 saat @ 30sn aralık
+const MAX_NOKTA   = 2880;   // 24 saat @ 30sn aralık
+const LS_KEY      = 'kombi_gecmis_v2';
+const MIN_ARALIK  = 25000;  // aynı cihazdan gelen paketler arasında min 25sn fark
+
 let gecmis = [];
 
+// localStorage'dan yükle — 24 saatten eski noktaları temizle
+(function gecmisYukle() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+    const eslim = Date.now() - 24 * 3600 * 1000;
+    gecmis = JSON.parse(raw).filter(d => d.ts >= eslim);
+  } catch(e) { gecmis = []; }
+})();
+
+let sonKayitTs = 0;
+
 function gecmisEkle(t, kombi) {
-  gecmis.push({ ts: Date.now(), t, kombi });
+  const simdi = Date.now();
+  if (simdi - sonKayitTs < MIN_ARALIK) { grafikCiz(); return; }
+  sonKayitTs = simdi;
+
+  gecmis.push({ ts: simdi, t, kombi });
   if (gecmis.length > MAX_NOKTA) gecmis.shift();
+
+  // localStorage'a kaydet (her 5 noktada bir — performans)
+  if (gecmis.length % 5 === 0) {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(gecmis)); } catch(e) {}
+  }
   grafikCiz();
 }
+
+// Sayfa kapanırken son durumu kaydet
+window.addEventListener('beforeunload', () => {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(gecmis)); } catch(e) {}
+});
 
 // ---- Canvas grafik ----
 function grafikCiz() {
@@ -286,6 +417,13 @@ function grafikCiz() {
   const gH = H - PAD.top - PAD.bottom;
 
   ctx.clearRect(0, 0, W, H);
+
+  // Nokta sayısını güncelle
+  const sayacEl = document.getElementById('grafikNoktaSayisi');
+  if (sayacEl) {
+    const gorunenSayi = gecmis.filter(d => d.ts >= Date.now() - 24*3600*1000).length;
+    sayacEl.textContent = gorunenSayi + ' nokta (localStorage)';
+  }
 
   // Arka plan
   ctx.fillStyle = '#0f172a';
@@ -419,6 +557,20 @@ function log(mesaj, tip = '') {
   if (alan.children.length > 150) alan.removeChild(alan.lastChild);
 }
 
+// ---- Eşik etiketlerini anlık güncelle ----
+function esikEtiketGuncelle() {
+  const hedef = parseFloat(document.getElementById('hedefSic').value);
+  const alt   = parseFloat(document.getElementById('histAlt').value);
+  const ust   = parseFloat(document.getElementById('histUst').value);
+  if (isNaN(hedef) || isNaN(alt) || isNaN(ust)) return;
+  const acEsik  = (hedef - alt).toFixed(1);
+  const kapEsik = (hedef - ust).toFixed(1);
+  document.getElementById('acEsikLabel').textContent  = '→ AÇ: '    + acEsik  + '°C';
+  document.getElementById('kapEsikLabel').textContent = '→ KAPAT: ' + kapEsik + '°C';
+  document.getElementById('esikGoster').textContent   = acEsik + ' › ' + kapEsik;
+  document.getElementById('esikAlt').textContent      = 'aç › kapat °C';
+}
+
 // ---- Mod UI ----
 function modGuncelleUI(mod) {
   ['btnAuto','btnAc','btnKapat'].forEach(id =>
@@ -467,6 +619,9 @@ function baglan() {
 
       // ---- Sıcaklık paketi ----
       if (topic.endsWith('/sicaklik')) {
+        // Cihaz online işaretle
+        const tVal = data.t !== undefined ? data.t.toFixed(1) + '°C' : '?';
+        cihazDurumGuncelle('sicaklik', `T:${tVal}  Kombi:${data.kombi ? 'AÇIK' : 'KAPALI'}`);
 
         if (data.t !== undefined) {
           const el = document.getElementById('sicaklik');
@@ -485,6 +640,7 @@ function baglan() {
         // Histerezis eşikleri
         if (data.hist_alt !== undefined) guvenliYaz('histAlt', data.hist_alt.toFixed(1));
         if (data.hist_ust !== undefined) guvenliYaz('histUst', data.hist_ust.toFixed(1));
+        esikEtiketGuncelle();  // input değerleri güncellenince etiketi de güncelle
         if (data.ac_esik !== undefined && data.kap_esik !== undefined) {
           document.getElementById('esikGoster').textContent =
             data.ac_esik.toFixed(1) + ' › ' + data.kap_esik.toFixed(1);
@@ -517,6 +673,10 @@ function baglan() {
           el.className   = 'kart-deger ' + (data.bat < 15 ? 'kirmizi' : data.bat < 40 ? 'sari' : 'yesil');
         }
 
+        // Min süreler — ESP'den gelen değerleri yaz
+        if (data.min_acik_dk !== undefined)   guvenliYaz('minAcikDk',   data.min_acik_dk);
+        if (data.min_kapali_dk !== undefined) guvenliYaz('minKapaliDk', data.min_kapali_dk);
+
         if (data.mod) modGuncelleUI(data.mod);
 
         // 24 saatlik geçmişe ekle
@@ -538,6 +698,8 @@ function baglan() {
 
       if (topic.endsWith('/heartbeat')) {
         const alive = data.alive;
+        // Heartbeat'ten de cihaz online bilgisini güncelle
+        if (alive) cihazDurumGuncelle('sicaklik', null);
         document.getElementById('baglantiDot').className =
           'dot' + (alive ? '' : ' kirmizi-dot');
         document.getElementById('baglantiMetin').textContent =
@@ -546,6 +708,11 @@ function baglan() {
       }
 
       if (topic.endsWith('/role/durum')) {
+        // Röle ESP online işaretle
+        const roleStr = data.role ? 'AÇIK' : 'KAPALI';
+        const rssi    = data.wifi_rssi !== undefined ? `  RSSI:${data.wifi_rssi}dB` : '';
+        cihazDurumGuncelle('role', `Röle:${roleStr}${rssi}`);
+
         if (data.role !== undefined) {
           const el = document.getElementById('roleDurum');
           el.textContent = data.role ? 'AÇIK' : 'KAPALI';
@@ -584,14 +751,28 @@ function modGonder(mod) {
 // ---- Histerezis ayarları gönder ----
 function histGonder() {
   if (!client?.connected) { alert('MQTT bağlı değil!'); return; }
-  const hedef = parseFloat(document.getElementById('hedefSic').value);
-  const alt   = parseFloat(document.getElementById('histAlt').value);
-  const ust   = parseFloat(document.getElementById('histUst').value);
+  const hedef      = parseFloat(document.getElementById('hedefSic').value);
+  const alt        = parseFloat(document.getElementById('histAlt').value);
+  const ust        = parseFloat(document.getElementById('histUst').value);
+  const minAcik    = parseInt(document.getElementById('minAcikDk').value);
+  const minKapali  = parseInt(document.getElementById('minKapaliDk').value);
   if (hedef < 15 || hedef > 29) { alert('Hedef 15–29°C arası olmalı!'); return; }
   if (alt <= ust) { alert('Alt bant, üst banttan büyük olmalı!\nÖrn: alt=0.5, üst=0.2'); return; }
-  const ayar = { hedef_sic: hedef, hist_alt: alt, hist_ust: ust };
+  if (minAcik < 1 || minAcik > 60)   { alert('Min açık süre 1–60 dk arası olmalı!'); return; }
+  if (minKapali < 1 || minKapali > 30) { alert('Min kapalı süre 1–30 dk arası olmalı!'); return; }
+  const ayar = { hedef_sic: hedef, hist_alt: alt, hist_ust: ust,
+                 min_acik_dk: minAcik, min_kapali_dk: minKapali };
   client.publish(`${deviceId}/ayarlar`, JSON.stringify(ayar));
-  log(`Histerezis → Hedef:${hedef}°C  AÇ:${(hedef-alt).toFixed(1)}°C  KAPAT:${(hedef-ust).toFixed(1)}°C`, 'ok');
+  log(`Ayarlar → Hedef:${hedef}°C  AÇ:${(hedef-alt).toFixed(1)}°C  KAPAT:${(hedef-ust).toFixed(1)}°C  MinAçık:${minAcik}dk  MinKapalı:${minKapali}dk`, 'ok');
+}
+
+function gecmisSifirla() {
+  if (!confirm('24 saatlik grafik geçmişi silinsin mi?')) return;
+  gecmis = [];
+  sonKayitTs = 0;
+  try { localStorage.removeItem(LS_KEY); } catch(e) {}
+  grafikCiz();
+  log('Grafik geçmişi temizlendi', 'uyari');
 }
 
 // ---- Hedef gönder (geriye uyumluluk) ----
@@ -600,7 +781,7 @@ function pidGonder()   { histGonder(); }
 
 
 
-window.onload = () => { grafikYeniden(); baglan(); }
+window.onload = () => { esikEtiketGuncelle(); grafikYeniden(); baglan(); }
 </script>
 </body>
 </html>
