@@ -89,8 +89,9 @@ body {
   min-width: 0;
 }
 .sdot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-.sdot.on  { background: var(--grn); box-shadow: 0 0 5px var(--grn); animation: blink 2s infinite; }
-.sdot.off { background: var(--red); }
+.sdot.on   { background: var(--grn); box-shadow: 0 0 5px var(--grn); animation: blink 2s infinite; }
+.sdot.warn { background: var(--yel); box-shadow: 0 0 5px var(--yel); animation: blink 1.2s infinite; }
+.sdot.off  { background: var(--red); }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
 .sp-label { font-size: 0.55rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sp-val   { font-size: 0.62rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -355,8 +356,9 @@ body {
 }
 .crow:last-child { border: none; }
 .cdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-.cdot.on  { background: var(--grn); box-shadow: 0 0 4px var(--grn); }
-.cdot.off { background: var(--red); }
+.cdot.on   { background: var(--grn); box-shadow: 0 0 4px var(--grn); }
+.cdot.warn { background: var(--yel); box-shadow: 0 0 4px var(--yel); }
+.cdot.off  { background: var(--red); }
 .cad    { color: var(--muted); width: 80px; flex-shrink: 0; font-size: 0.58rem; }
 .cdet   { flex: 1; color: var(--text); font-size: 0.65rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csure  { color: var(--dim); font-size: 0.58rem; }
@@ -450,6 +452,11 @@ body {
       <div class="rl">Eşikler</div>
       <div class="rv c-blu" id="esikGoster">—</div>
       <div class="re" id="esikAlt">aç › kapat</div>
+    </div>
+    <div class="row">
+      <div class="rl">Röle RSSI</div>
+      <div class="rv" id="rssiDeger">—</div>
+      <div class="re">WiFi sinyal</div>
     </div>
     <div class="row">
       <div class="rl">Kapı</div>
@@ -596,22 +603,49 @@ let client   = null;
 let deviceId = 'silent-hearth-681';
 
 // ── CİHAZ DURUM TAKİBİ ──
+// durum: 'online' | 'warn' | 'offline'
 const cihazlar = {
-  s: { sonGoren: 0, online: false },  // sicaklik
-  r: { sonGoren: 0, online: false }   // role
+  s: { sonGoren: 0, durum: 'offline' },  // sicaklik
+  r: { sonGoren: 0, durum: 'offline' }   // role
 };
-const TIMEOUT = 35000;
+const TIMEOUT         = 90000;   // 90 sn — röle 60sn'de bir yayın yapıyor
+const TIMEOUT_WARN    = 70000;   // 70 sn — sarı uyarı eşiği
+
+// 'online' | 'warn' | 'offline'
+function cDurumUygula(c, durum, detay) {
+  const prefix  = c === 's' ? 'sicaklikEsp' : 'roleEsp';
+  const hDotEl  = document.getElementById(prefix + 'Dot');
+  const bDotEl  = document.getElementById(c === 's' ? 'cSDot' : 'cRDot');
+  const bDetEl  = document.getElementById(c === 's' ? 'cSDet' : 'cRDet');
+
+  if (durum === 'online') {
+    if (hDotEl) hDotEl.className = 'sdot on';
+    if (bDotEl) bDotEl.className = 'cdot on';
+    if (bDetEl && detay) bDetEl.textContent = detay;
+  } else if (durum === 'warn') {
+    if (hDotEl) hDotEl.className = 'sdot warn';
+    if (bDotEl) bDotEl.className = 'cdot warn';
+    if (bDetEl) bDetEl.textContent = '⚠️ Sinyal zayıf...';
+  } else {
+    if (hDotEl) hDotEl.className = 'sdot off';
+    if (bDotEl) bDotEl.className = 'cdot off';
+    if (bDetEl) bDetEl.textContent = '🔴 Sinyal yok!';
+  }
+}
 
 function cOnline(c, detay) {
   cihazlar[c].sonGoren = Date.now();
-  cihazlar[c].online   = true;
-  const prefix = c === 's' ? 'sicaklikEsp' : 'roleEsp';
-  const hDot = document.getElementById(prefix + 'Dot');
-  if (hDot) hDot.className = 'sdot on';
-  const bDot = document.getElementById(c === 's' ? 'cSDot' : 'cRDot');
-  const bDet = document.getElementById(c === 's' ? 'cSDet' : 'cRDet');
-  if (bDot) bDot.className = 'cdot on';
-  if (bDet && detay) bDet.textContent = detay;
+  cihazlar[c].durum    = 'online';
+  cDurumUygula(c, 'online', detay);
+}
+
+// MQTT reconnect olunca tüm cihazların sonGoren'ini sıfırla
+function cihazlariSifirla() {
+  Object.keys(cihazlar).forEach(c => {
+    cihazlar[c].sonGoren = 0;
+    cihazlar[c].durum    = 'offline';
+    cDurumUygula(c, 'offline', null);
+  });
 }
 
 setInterval(() => {
@@ -620,14 +654,16 @@ setInterval(() => {
     if (!cihazlar[c].sonGoren) return;
     const gecen = now - cihazlar[c].sonGoren;
 
-    if (gecen > TIMEOUT && cihazlar[c].online) {
-      cihazlar[c].online = false;
-      const hDot = document.getElementById(prefix + 'Dot');
-      if (hDot) hDot.className = 'sdot off';
-      const bDot = document.getElementById(c === 's' ? 'cSDot' : 'cRDot');
-      const bDet = document.getElementById(c === 's' ? 'cSDet' : 'cRDet');
-      if (bDot) bDot.className = 'cdot off';
-      if (bDet) bDet.textContent = '⚠️ Sinyal yok!';
+    let yeniDurum;
+    if      (gecen > TIMEOUT)      yeniDurum = 'offline';
+    else if (gecen > TIMEOUT_WARN) yeniDurum = 'warn';
+    else                           yeniDurum = 'online';
+
+    if (yeniDurum !== cihazlar[c].durum) {
+      cihazlar[c].durum = yeniDurum;
+      cDurumUygula(c, yeniDurum, null);
+      if (yeniDurum === 'warn')    log((c==='s'?'Sıcaklık':'Röle') + ' ESP sinyali zayıflıyor...', 'wa');
+      if (yeniDurum === 'offline') log((c==='s'?'Sıcaklık':'Röle') + ' ESP sinyal yok!', 'er');
     }
 
     const s = gecen < 60000   ? Math.round(gecen/1000)+'sn'
@@ -818,6 +854,7 @@ function baglan() {
     document.getElementById('baglantiMetin').textContent = 'bağlı';
     document.getElementById('mqttDurum').textContent   = 'Bağlandı ✓';
     log('MQTT bağlandı', 'ok');
+    cihazlariSifirla();  // reconnect sonrası eski sonGoren geçersiz
     client.subscribe(deviceId + '/sicaklik');
     client.subscribe(deviceId + '/heartbeat');
     client.subscribe(deviceId + '/role/durum');
@@ -905,15 +942,29 @@ function baglan() {
 
       // Röle
       if (topic.endsWith('/role/durum')) {
-        const rssi = d.wifi_rssi !== undefined ? ' RSSI:'+d.wifi_rssi : '';
-        cOnline('r', 'Röle:' + (d.role?'AÇIK':'KAPALI') + rssi);
+        const rssi    = d.wifi_rssi;
+        const rssiStr = rssi !== undefined ? ' RSSI:' + rssi + 'dBm' : '';
+        cOnline('r', 'Röle:' + (d.role ? 'AÇIK' : 'KAPALI') + rssiStr);
+
+        // RSSI gösterimi
+        if (rssi !== undefined) {
+          const rssiEl = document.getElementById('rssiDeger');
+          if (rssiEl) {
+            rssiEl.textContent = rssi + ' dBm';
+            rssiEl.className   = rssi < -80 ? 'rv c-red' : rssi < -65 ? 'rv c-yel' : 'rv c-grn';
+          }
+          if (rssi < -80) {
+            log('⚠️ Röle ESP bağlantı kalitesi düşük: ' + rssi + ' dBm', 'wa');
+          }
+        }
+
         if (d.role !== undefined) {
           const el = document.getElementById('roleDurum');
           el.textContent = d.role ? 'AÇIK' : 'KAPALI';
           el.className   = 'mk-v ' + (d.role ? 'c-ora' : 'c-grn');
           document.getElementById('roleAlt').textContent = d.neden ? '↳ ' + d.neden : '—';
         }
-        log('Röle:' + (d.role?'AÇIK':'KAPALI') + ' | ' + (d.neden||'') + ' | Güvenli:' + (d.guvenli?'evet':'⚠️HAYIR'),
+        log('Röle:' + (d.role?'AÇIK':'KAPALI') + ' | ' + (d.neden||'') + ' | Güvenli:' + (d.guvenli?'evet':'⚠️HAYIR') + rssiStr,
           d.guvenli ? '' : 'wa');
       }
 
@@ -935,7 +986,7 @@ function modGonder(mod) {
   if (!client?.connected) { alert('MQTT bağlı değil!'); return; }
   const e = { auto:'Otomatik', manual_on:'Manuel Aç', manual_off:'Manuel Kapat' };
   if (!confirm('"' + e[mod] + '" moduna geçilsin mi?')) return;
-  client.publish(deviceId + '/kombi/cmd', mod, { retain: true });
+  client.publish(deviceId + '/kombi/cmd', mod, { retain: false });
   modGuncelleUI(mod);
   log('Mod → ' + mod, 'ok');
 }
