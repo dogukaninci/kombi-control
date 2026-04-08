@@ -291,16 +291,57 @@ body {
   font-size: 0.58rem;
   color: var(--muted);
 }
-.gleg { display: flex; gap: 10px; flex: 1; }
+.gleg { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
 .gleg span { display: flex; align-items: center; gap: 3px; }
-.gl-l { width: 10px; height: 2px; background: var(--blu); border-radius: 2px; }
-.gl-r { width: 10px; height: 7px; background: rgba(249,115,22,.3); border-radius: 2px; }
+.gl-l  { width: 10px; height: 2px; background: var(--blu); border-radius: 2px; }
+.gl-r  { width: 10px; height: 7px; background: rgba(249,115,22,.55); border-radius: 2px; }
+.gl-h  { width: 10px; height: 1px; background: var(--grn); border-radius: 2px; border-top: 1px dashed var(--grn); }
+.gl-ac { width: 10px; height: 1px; border-top: 1px dashed var(--red); }
 .gclear {
   background: none; border: 1px solid var(--brd2); border-radius: 5px;
   color: var(--muted); font-size: 0.58rem; padding: 2px 7px; cursor: pointer;
   font-family: 'DM Mono', monospace;
 }
 .gnokta { font-size: 0.55rem; color: var(--dim); }
+
+/* Zoom butonları */
+.gzoom {
+  display: flex; gap: 4px; margin-bottom: 8px;
+}
+.gzbtn {
+  flex: 1; padding: 5px 2px;
+  background: var(--bg3); border: 1px solid var(--brd2); border-radius: 6px;
+  font-family: 'DM Mono', monospace; font-size: 0.6rem; color: var(--muted);
+  cursor: pointer; text-align: center; transition: all .15s;
+}
+.gzbtn.on  { background: #0c2850; border-color: var(--blu); color: var(--blu); }
+.gzbtn:active { transform: scale(.95); }
+
+/* Kombi geçmiş listesi */
+.gcont2 {
+  background: var(--bg2);
+  border: 1px solid var(--brd);
+  border-radius: var(--r);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.gcont2-head {
+  padding: 7px 12px; border-bottom: 1px solid var(--brd);
+  font-size: 0.55rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.gevent-list { max-height: 240px; overflow-y: auto; }
+.gevent {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-bottom: 1px solid var(--brd);
+  font-size: 0.65rem;
+}
+.gevent:last-child { border: none; }
+.gev-icon { font-size: 0.8rem; flex-shrink: 0; }
+.gev-zaman { color: var(--muted); font-size: 0.58rem; width: 46px; flex-shrink: 0; }
+.gev-durum { font-weight: 500; width: 50px; flex-shrink: 0; }
+.gev-sure  { color: var(--muted); font-size: 0.58rem; flex: 1; }
+.gev-t     { color: var(--blu); font-size: 0.62rem; }
 
 /* ── LOG ── */
 .log-box {
@@ -539,11 +580,31 @@ body {
       <div class="gleg">
         <span><div class="gl-l"></div>Sıcaklık</span>
         <span><div class="gl-r"></div>Kombi</span>
+        <span><div class="gl-h"></div>Hedef</span>
+        <span><div class="gl-ac"></div>Eşikler</span>
       </div>
       <span class="gnokta" id="grafikNoktaSayisi">—</span>
       <button class="gclear" onclick="gecmisSifirla()">🗑</button>
     </div>
+    <div class="gzoom">
+      <button class="gzbtn" id="gz1"  onclick="zoomSec(1)">1sa</button>
+      <button class="gzbtn" id="gz3"  onclick="zoomSec(3)">3sa</button>
+      <button class="gzbtn" id="gz6"  onclick="zoomSec(6)">6sa</button>
+      <button class="gzbtn on" id="gz12" onclick="zoomSec(12)">12sa</button>
+      <button class="gzbtn" id="gz24" onclick="zoomSec(24)">24sa</button>
+    </div>
     <canvas id="grafik" style="display:block;width:100%;border-radius:6px;"></canvas>
+  </div>
+
+  <!-- Kombi olay listesi -->
+  <div class="gcont2">
+    <div class="gcont2-head">
+      <span>Kombi Olayları</span>
+      <span class="gnokta" id="eventSayisi">—</span>
+    </div>
+    <div class="gevent-list" id="eventList">
+      <div class="gevent"><span style="color:var(--muted);font-size:0.62rem;padding:4px">Veri bekleniyor...</span></div>
+    </div>
   </div>
 </div>
 
@@ -595,7 +656,7 @@ function tabGec(id) {
   document.querySelectorAll('.tab').forEach((t, i) => {
     t.classList.toggle('on', PAGES[i] === id);
   });
-  if (id === 'grafik') grafikYeniden();
+  if (id === 'grafik') { grafikYeniden(); eventListGuncelle(); }
 }
 
 // ── STATE ──
@@ -692,19 +753,32 @@ let gecmis = [];
 })();
 
 let sonKayitTs = 0;
+let zoomSaat   = 12;   // varsayılan zoom
+
 function gecmisEkle(t, kombi) {
   const now = Date.now();
-  if (now - sonKayitTs < MIN_ARALIK) { grafikCiz(); return; }
+  if (now - sonKayitTs < MIN_ARALIK) { grafikCiz(); eventListGuncelle(); return; }
   sonKayitTs = now;
   gecmis.push({ ts: now, t, kombi });
   if (gecmis.length > MAX_NOKTA) gecmis.shift();
   if (gecmis.length % 5 === 0)
     try { localStorage.setItem(LS_KEY, JSON.stringify(gecmis)); } catch(e) {}
   grafikCiz();
+  eventListGuncelle();
 }
 window.addEventListener('beforeunload', () => {
   try { localStorage.setItem(LS_KEY, JSON.stringify(gecmis)); } catch(e) {}
 });
+
+// ── ZOOM SEÇİMİ ──
+function zoomSec(saat) {
+  zoomSaat = saat;
+  [1,3,6,12,24].forEach(s => {
+    const el = document.getElementById('gz' + s);
+    if (el) el.classList.toggle('on', s === saat);
+  });
+  grafikCiz();
+}
 
 // ── GRAFİK ──
 function grafikCiz() {
@@ -712,14 +786,17 @@ function grafikCiz() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
-  const P = { t: 8, r: 6, b: 22, l: 32 };
+  const P = { t: 10, r: 8, b: 24, l: 34 };
   const gW = W - P.l - P.r, gH = H - P.t - P.b;
 
   ctx.fillStyle = '#111827';
   ctx.fillRect(0, 0, W, H);
 
+  const now  = Date.now();
+  const t0   = now - zoomSaat * 3600000;
+  const vis  = gecmis.filter(d => d.ts >= t0);
+
   const sayEl = document.getElementById('grafikNoktaSayisi');
-  const vis = gecmis.filter(d => d.ts >= Date.now() - 86400000);
   if (sayEl) sayEl.textContent = vis.length + ' nokta';
 
   if (vis.length < 2) {
@@ -728,35 +805,64 @@ function grafikCiz() {
     return;
   }
 
-  const now = Date.now(), t0 = now - 86400000;
-  const tMin = Math.floor(Math.min(...vis.map(d=>d.t)) - 1);
-  const tMax = Math.ceil (Math.max(...vis.map(d=>d.t)) + 1);
-  const tR   = tMax - tMin || 1;
-  const xP   = ts => P.l + ((ts - t0) / 86400000) * gW;
-  const yP   = t  => P.t + (1 - (t - tMin) / tR)  * gH;
+  // Sıcaklık ekseni sınırları — eşik çizgileri de görünür olsun
+  const hedef = parseFloat(document.getElementById('hedefSic')?.value) || null;
+  const histA = parseFloat(document.getElementById('histAlt')?.value)  || null;
+  const histU = parseFloat(document.getElementById('histUst')?.value)  || null;
+  const acEsik  = (hedef && histA) ? hedef - histA : null;
+  const kapEsik = (hedef && histU) ? hedef - histU : null;
 
-  // Kombi bantları
-  ctx.fillStyle = 'rgba(249,115,22,0.11)';
+  const temps = vis.map(d => d.t);
+  if (hedef)   temps.push(hedef + 0.5);
+  if (acEsik)  temps.push(acEsik  - 0.3);
+
+  const tMin = Math.floor(Math.min(...temps) - 0.5);
+  const tMax = Math.ceil (Math.max(...temps) + 0.5);
+  const tR   = tMax - tMin || 1;
+
+  const xP = ts => P.l + ((ts - t0) / (zoomSaat * 3600000)) * gW;
+  const yP = t  => P.t + (1 - (t - tMin) / tR) * gH;
+
+  // ── Kombi aktif bantları (belirgin turuncu) ──
   let bs = null;
   for (const d of vis) {
     if (d.kombi && bs === null) bs = d.ts;
-    if (!d.kombi && bs !== null) { ctx.fillRect(xP(bs), P.t, xP(d.ts)-xP(bs), gH); bs = null; }
+    if (!d.kombi && bs !== null) {
+      ctx.fillStyle = 'rgba(249,115,22,0.22)';
+      ctx.fillRect(xP(bs), P.t, xP(d.ts)-xP(bs), gH);
+      // Başlangıç çizgisi
+      ctx.strokeStyle = 'rgba(249,115,22,0.7)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(xP(bs), P.t); ctx.lineTo(xP(bs), P.t+gH); ctx.stroke();
+      bs = null;
+    }
   }
-  if (bs !== null) ctx.fillRect(xP(bs), P.t, xP(now)-xP(bs), gH);
+  if (bs !== null) {
+    ctx.fillStyle = 'rgba(249,115,22,0.22)';
+    ctx.fillRect(xP(bs), P.t, xP(now)-xP(bs), gH);
+    ctx.strokeStyle = 'rgba(249,115,22,0.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(xP(bs), P.t); ctx.lineTo(xP(bs), P.t+gH); ctx.stroke();
+    // "Şu an açık" etiketi
+    ctx.fillStyle = 'rgba(249,115,22,0.9)'; ctx.font = 'bold 8px DM Mono, monospace'; ctx.textAlign = 'left';
+    ctx.fillText('🔥', Math.min(xP(bs)+2, xP(now)-20), P.t+10);
+  }
 
-  // Grid Y
-  const step = tR <= 6 ? 1 : tR <= 12 ? 2 : 5;
+  // ── Grid Y ──
+  const step = tR <= 4 ? 0.5 : tR <= 8 ? 1 : tR <= 15 ? 2 : 5;
   ctx.font = '8px DM Mono, monospace'; ctx.textAlign = 'right';
   for (let t = tMin; t <= tMax; t += step) {
     const y = yP(t);
+    if (y < P.t || y > P.t + gH) continue;
     ctx.strokeStyle = '#1a2234'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(P.l, y); ctx.lineTo(P.l+gW, y); ctx.stroke();
-    ctx.fillStyle = '#4a6080'; ctx.fillText(t+'°', P.l-3, y+3);
+    if (t === Math.round(t)) {   // sadece tam sayılarda etiket
+      ctx.fillStyle = '#4a6080'; ctx.fillText(t+'°', P.l-3, y+3);
+    }
   }
 
-  // Grid X — her 6 saat (mobil dostu)
+  // ── Grid X ──
   ctx.textAlign = 'center';
-  for (let h = 0; h <= 24; h += 6) {
+  const xAdim = zoomSaat <= 1 ? 0.25 : zoomSaat <= 3 ? 0.5 : zoomSaat <= 6 ? 1 : zoomSaat <= 12 ? 2 : 6;
+  for (let h = 0; h <= zoomSaat; h += xAdim) {
     const ts = t0 + h * 3600000, x = xP(ts);
     ctx.strokeStyle = '#1a2234'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, P.t); ctx.lineTo(x, P.t+gH); ctx.stroke();
@@ -764,26 +870,103 @@ function grafikCiz() {
     ctx.fillText(new Date(ts).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}), x, H-4);
   }
 
-  // Eğri
-  ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+  // ── Eşik çizgileri ──
+  function esikCiz(val, renk, etiket, noktali) {
+    if (!val || val < tMin || val > tMax) return;
+    const y = yP(val);
+    ctx.strokeStyle = renk; ctx.lineWidth = 1;
+    if (noktali) { ctx.setLineDash([4,3]); } else { ctx.setLineDash([]); }
+    ctx.beginPath(); ctx.moveTo(P.l, y); ctx.lineTo(P.l+gW, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '7px DM Mono, monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = renk;
+    ctx.fillText(etiket, P.l+2, y-2);
+  }
+  if (hedef)   esikCiz(hedef,   'rgba(52,211,153,0.7)',  'H:'+hedef.toFixed(1),   false);
+  if (acEsik)  esikCiz(acEsik,  'rgba(248,113,113,0.7)', 'AÇ:'+acEsik.toFixed(1), true);
+  if (kapEsik) esikCiz(kapEsik, 'rgba(251,191,36,0.6)',  'KAP:'+kapEsik.toFixed(1), true);
+
+  // ── Sıcaklık eğrisi ──
+  ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.setLineDash([]);
   ctx.beginPath();
   vis.forEach((d, i) => i === 0 ? ctx.moveTo(xP(d.ts), yP(d.t)) : ctx.lineTo(xP(d.ts), yP(d.t)));
   ctx.stroke();
 
-  // Son nokta
+  // ── Son nokta ──
   const last = vis[vis.length-1];
   ctx.fillStyle = '#38bdf8';
   ctx.beginPath(); ctx.arc(xP(last.ts), yP(last.t), 3, 0, Math.PI*2); ctx.fill();
+  // Son değer etiketi
+  ctx.fillStyle = '#38bdf8'; ctx.font = 'bold 8px DM Mono, monospace'; ctx.textAlign = 'left';
+  const lx = xP(last.ts) + 5, ly = yP(last.t);
+  ctx.fillText(last.t.toFixed(1)+'°', lx > P.l+gW-28 ? P.l+gW-28 : lx, ly < P.t+8 ? P.t+9 : ly+4);
 
-  ctx.strokeStyle = '#1f2d42'; ctx.lineWidth = 1;
+  // ── Çerçeve ──
+  ctx.strokeStyle = '#1f2d42'; ctx.lineWidth = 1; ctx.setLineDash([]);
   ctx.strokeRect(P.l, P.t, gW, gH);
+}
+
+// ── KOMBİ OLAY LİSTESİ ──
+function eventListGuncelle() {
+  const liste = document.getElementById('eventList');
+  const sayEl = document.getElementById('eventSayisi');
+  if (!liste) return;
+
+  // Tüm geçmişten açma/kapama olayları çıkar
+  const olaylar = [];
+  let prevKombi = null;
+  let acilisTs  = null;
+  let acilisT   = null;
+
+  for (const d of gecmis) {
+    if (prevKombi === null) { prevKombi = d.kombi; if (d.kombi) { acilisTs = d.ts; acilisT = d.t; } continue; }
+
+    if (!prevKombi && d.kombi) {        // kapandı → açıldı
+      acilisTs = d.ts; acilisT = d.t;
+      olaylar.push({ tip: 'acildi', ts: d.ts, t: d.t, sure: null });
+    } else if (prevKombi && !d.kombi) { // açıktı → kapandı
+      const sure = acilisTs ? Math.round((d.ts - acilisTs) / 60000) : null;
+      olaylar.push({ tip: 'kapandi', ts: d.ts, t: d.t, sure });
+    }
+    prevKombi = d.kombi;
+  }
+
+  // Hâlâ açıksa
+  if (prevKombi && acilisTs) {
+    const sure = Math.round((Date.now() - acilisTs) / 60000);
+    olaylar.push({ tip: 'surekli', ts: acilisTs, t: acilisT, sure });
+  }
+
+  if (sayEl) sayEl.textContent = olaylar.length + ' olay';
+
+  if (olaylar.length === 0) {
+    liste.innerHTML = '<div class="gevent"><span style="color:var(--muted);font-size:0.62rem;padding:4px">Henüz olay yok</span></div>';
+    return;
+  }
+
+  // En yeni önce
+  const gorunur = [...olaylar].reverse().slice(0, 40);
+  liste.innerHTML = gorunur.map(o => {
+    const saat = new Date(o.ts).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'});
+    const icon  = o.tip === 'acildi' ? '🔥' : o.tip === 'kapandi' ? '✅' : '🔥';
+    const renk  = o.tip === 'acildi' ? 'var(--ora)' : o.tip === 'kapandi' ? 'var(--grn)' : 'var(--yel)';
+    const etiket = o.tip === 'acildi' ? 'AÇILDI' : o.tip === 'kapandi' ? 'KAPANDI' : 'AÇIK ▶';
+    const sureStr = o.sure !== null ? (o.sure < 1 ? '<1dk' : o.sure + ' dk') : '';
+    return `<div class="gevent">
+      <span class="gev-icon">${icon}</span>
+      <span class="gev-zaman">${saat}</span>
+      <span class="gev-durum" style="color:${renk}">${etiket}</span>
+      <span class="gev-sure">${sureStr ? (o.tip==='kapandi'?'süre: ':'aktif: ') + sureStr : ''}</span>
+      <span class="gev-t">${o.t?.toFixed(1)}°C</span>
+    </div>`;
+  }).join('');
 }
 
 function grafikYeniden() {
   const c = document.getElementById('grafik');
   if (!c) return;
   const w = c.parentElement.clientWidth - 20;
-  c.width = w; c.height = Math.round(w * 0.44);
+  c.width = w; c.height = Math.round(w * 0.55);
   grafikCiz();
 }
 window.addEventListener('resize', grafikYeniden);
@@ -1018,7 +1201,7 @@ function gecmisSifirla() {
 function hedefGonder() { histGonder(); }
 function pidGonder()   { histGonder(); }
 
-window.onload = () => { esikEtiketGuncelle(); grafikYeniden(); baglan(); };
+window.onload = () => { esikEtiketGuncelle(); grafikYeniden(); eventListGuncelle(); baglan(); };
 </script>
 </body>
 </html>
