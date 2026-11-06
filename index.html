@@ -271,10 +271,10 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
     <div class="tgt-row">
       <button class="tgt-step" onclick="stepTarget(-0.5)">−</button>
       <input class="ainput tgt-input" type="number" id="targetInput" value="22" min="15" max="29" step="0.5"
-             onfocus="focusIn(this)" onblur="focusOut(this)">
+             onfocus="focusIn(this)" onblur="focusOut(this)" onchange="queueTargetSend()">
       <button class="tgt-step" onclick="stepTarget(0.5)">+</button>
     </div>
-    <button class="sbtn" onclick="sendSettings()">Save → ESP</button>
+    <div class="aesik" id="targetSaveStatus" style="text-align:center">Changes are sent to the ESP automatically</div>
     <div class="mod-info">The boiler learns how fast the room heats up and cools down, and works out its own run time every 10 minutes.</div>
   </div>
 
@@ -839,6 +839,25 @@ function stepTarget(delta) {
   const el=document.getElementById('targetInput');
   const v=parseFloat(el.value)||22;
   el.value=Math.min(29,Math.max(15,Math.round((v+delta)*2)/2)).toFixed(1);
+  queueTargetSend();
+}
+
+// Auto-send: wait until the −/+ presses stop, then send once.
+// Until the ESP echoes the new target, incoming /temp messages must not
+// overwrite the box with the old value.
+const TARGET_SEND_DELAY = 1200;
+let targetSendTimer=null, pendingTarget=null, pendingUntil=0;
+function setSaveStatus(txt, cls) {
+  const el=document.getElementById('targetSaveStatus');
+  el.textContent=txt; el.className='aesik'+(cls?' '+cls:'');
+}
+function queueTargetSend() {
+  const t=parseFloat(document.getElementById('targetInput').value);
+  if (isNaN(t)) return;
+  pendingTarget=Math.min(29,Math.max(15,t)); pendingUntil=Date.now()+15000;
+  setSaveStatus('Sending '+pendingTarget.toFixed(1)+' °C…','c-yel');
+  clearTimeout(targetSendTimer);
+  targetSendTimer=setTimeout(sendSettings, TARGET_SEND_DELAY);
 }
 
 // ════════════════════════════════════════════
@@ -934,7 +953,14 @@ function mqttConnect() {
 
         if (d.target!==undefined) {
           document.getElementById('targetDisplay').textContent=d.target.toFixed(1);
-          safeSet('targetInput',d.target.toFixed(1));
+          if (pendingTarget!==null) {
+            if (Math.abs(d.target-pendingTarget)<0.05 && !targetSendTimer) {
+              pendingTarget=null; setSaveStatus('Saved on ESP ✓ '+d.target.toFixed(1)+' °C','c-grn');
+            } else if (Date.now()>pendingUntil && !targetSendTimer) {
+              pendingTarget=null; setSaveStatus('ESP did not confirm — still '+d.target.toFixed(1)+' °C','c-red');
+            }
+          }
+          if (pendingTarget===null) safeSet('targetInput',d.target.toFixed(1));
           grafTarget=d.target;
         }
         updateTpiUI(d);
@@ -1030,10 +1056,13 @@ function sendMode(mode) {
 }
 
 function sendSettings() {
-  if (!client?.connected){alert('MQTT not connected!');return;}
+  targetSendTimer=null;
+  if (!client?.connected){ setSaveStatus('Not sent — MQTT not connected','c-red'); pendingTarget=null; return; }
   const t=parseFloat(document.getElementById('targetInput').value);
-  if (isNaN(t)||t<15||t>29) {alert('Target must be 15–29°C');return;}
+  if (isNaN(t)||t<15||t>29) { setSaveStatus('Target must be 15–29 °C','c-red'); pendingTarget=null; return; }
   client.publish(deviceId+'/settings', JSON.stringify({target:t}));
+  pendingTarget=t; pendingUntil=Date.now()+15000;
+  setSaveStatus('Sent '+t.toFixed(1)+' °C — waiting for ESP…','c-yel');
   log('Settings → Target:'+t.toFixed(1)+'°C','ok');
 }
 
