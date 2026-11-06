@@ -241,7 +241,9 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
     </div>
   </div>
   <div class="rows">
+    <div class="row"><div class="rl">Why</div><div class="rv" id="reasonDisplay" style="font-weight:400;white-space:normal;line-height:1.4">—</div></div>
     <div class="row"><div class="rl">Duty</div><div class="rv c-ora" id="dutyDisplay">—</div><div class="re" id="cycleLeft">this cycle</div></div>
+    <div class="row"><div class="rl">Min ON/OFF</div><div class="rv" id="minTimes">—</div><div class="re">boiler protection</div></div>
     <div class="row"><div class="rl">Mode</div><div class="rv" id="modeRow">—</div><div class="re"></div></div>
     <div class="row"><div class="rl">Door</div><div class="rv" id="doorState">—</div><div class="re" id="doorSub">—</div></div>
     <div class="row"><div class="rl">Relay RSSI</div><div class="rv" id="rssiValue">—</div><div class="re">WiFi signal</div></div>
@@ -868,10 +870,42 @@ function queueTargetSend() {
 // ════════════════════════════════════════════
 // TPI / LEARNING UI
 // ════════════════════════════════════════════
+function mmss(s) { s=Math.max(0,Math.round(s||0)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+
+// Plain-language "why is the boiler on/off" from the ESP's reason code
+function reasonText(d) {
+  const left=d.cycle_left_s||0, onS=d.cycle_on_s||0, minOn=d.min_on_s||300;
+  const cycleS=600, elapsed=cycleS-left;
+  const needMin=((d.duty||0)*cycleS/60).toFixed(1);
+  switch (d.reason) {
+    case 'heating':    return ['🔥 Heating — '+mmss(onS-elapsed)+' left of this cycle\'s '+mmss(onS)+' run','c-ora'];
+    case 'short':      return ['⏳ Waiting — this cycle needs only '+needMin+' min, below the '+Math.round(minOn/60)
+                               +'-min minimum. It is carried over; next cycle in '+mmss(left),'c-yel'];
+    case 'cycle_off':  return ['✓ Ran '+mmss(onS)+' this cycle — off until the next cycle in '+mmss(left),''];
+    case 'warm':       return ['✓ No heat needed — room is at or above target','c-grn'];
+    case 'overshoot':  return ['✋ Stopped early — room went 0.4 °C over target','c-yel'];
+    case 'door':       return ['🚪 Door/window open — heating paused until the temperature stops falling','c-yel'];
+    case 'manual_on':  return ['🔥 Force On mode','c-ora'];
+    case 'manual_off': return ['❄️ Force Off mode','c-muted'];
+    case 'starting':   return ['… Starting a new cycle',''];
+    default:           return [null,''];
+  }
+}
+
 function updateTpiUI(d) {
   const auto=(d.mode||'auto')==='auto';
+  const [why, cls]=reasonText(d);
+  if (why) {
+    const el=document.getElementById('reasonDisplay');
+    el.textContent=why; el.className='rv '+cls;
+    document.getElementById('boilerSub').textContent=why.split(' — ')[0];
+  }
+  if (d.min_on_s!==undefined)
+    document.getElementById('minTimes').textContent=Math.round(d.min_on_s/60)+' min ON / '+Math.round(d.min_off_s/60)+' min OFF';
   if (d.duty!==undefined) {
-    document.getElementById('dutyDisplay').textContent = auto ? Math.round(d.duty*100)+' %' : '—';
+    document.getElementById('dutyDisplay').textContent = auto
+      ? Math.round(d.duty*100)+' %'+(d.cycle_on_s!==undefined ? '  → runs '+mmss(d.cycle_on_s) : '')
+      : '—';
     const left=d.cycle_left_s||0;
     document.getElementById('cycleLeft').textContent =
       auto&&left ? 'next cycle in '+Math.floor(left/60)+':'+String(left%60).padStart(2,'0') : 'this cycle';
@@ -974,7 +1008,7 @@ function mqttConnect() {
           const el=document.getElementById('boilerState');
           el.textContent=d.boiler?'ON':'OFF';
           el.className='mk-v '+(d.boiler?'c-ora':'c-grn');
-          document.getElementById('boilerSub').textContent=d.boiler?'🔥 Heating':'✓ Standby';
+          if (!d.reason) document.getElementById('boilerSub').textContent=d.boiler?'🔥 Heating':'✓ Standby';
         }
         if (d.door!==undefined) {
           const el=document.getElementById('doorState');
