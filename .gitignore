@@ -1,0 +1,8 @@
+# Wi-Fi credentials stay local (copy secrets.example.h → secrets.h)
+secrets.h
+
+# Arduino / editor build output
+build/
+*.bin
+*.elf
+.vscode/
