@@ -271,10 +271,10 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
   <div class="blok">
     <div class="blok-lbl">Target Temperature</div>
     <div class="tgt-row">
-      <button class="tgt-step" onclick="stepTarget(-0.5)">−</button>
-      <input class="ainput tgt-input" type="number" id="targetInput" value="22" min="15" max="29" step="0.5"
+      <button class="tgt-step" onclick="stepTarget(-0.2)">−</button>
+      <input class="ainput tgt-input" type="number" id="targetInput" value="22" min="15" max="29" step="0.1"
              onfocus="focusIn(this)" onblur="focusOut(this)" onchange="queueTargetSend()">
-      <button class="tgt-step" onclick="stepTarget(0.5)">+</button>
+      <button class="tgt-step" onclick="stepTarget(0.2)">+</button>
     </div>
     <div class="aesik" id="targetSaveStatus" style="text-align:center">Changes are sent to the ESP automatically</div>
     <div class="mod-info">The boiler learns how fast the room heats up and cools down, and works out its own run time every 10 minutes.</div>
@@ -845,7 +845,7 @@ function log(msg, type='') {
 function stepTarget(delta) {
   const el=document.getElementById('targetInput');
   const v=parseFloat(el.value)||22;
-  el.value=Math.min(29,Math.max(15,Math.round((v+delta)*2)/2)).toFixed(1);
+  el.value=Math.min(29,Math.max(15,Math.round((v+delta)*10)/10)).toFixed(1);
   queueTargetSend();
 }
 
@@ -861,7 +861,7 @@ function setSaveStatus(txt, cls) {
 function queueTargetSend() {
   const t=parseFloat(document.getElementById('targetInput').value);
   if (isNaN(t)) return;
-  pendingTarget=Math.min(29,Math.max(15,t)); pendingUntil=Date.now()+15000;
+  pendingTarget=Math.min(29,Math.max(15,Math.round(t*10)/10)); pendingUntil=Date.now()+15000;
   setSaveStatus('Sending '+pendingTarget.toFixed(1)+' °C…','c-yel');
   clearTimeout(targetSendTimer);
   targetSendTimer=setTimeout(sendSettings, TARGET_SEND_DELAY);
@@ -1099,8 +1099,9 @@ function sendMode(mode) {
 function sendSettings() {
   targetSendTimer=null;
   if (!client?.connected){ setSaveStatus('Not sent — MQTT not connected','c-red'); pendingTarget=null; return; }
-  const t=parseFloat(document.getElementById('targetInput').value);
+  let t=parseFloat(document.getElementById('targetInput').value);
   if (isNaN(t)||t<15||t>29) { setSaveStatus('Target must be 15–29 °C','c-red'); pendingTarget=null; return; }
+  t=Math.round(t*10)/10;   // typed values like 21.37 → 21.4
   client.publish(deviceId+'/settings', JSON.stringify({target:t}));
   pendingTarget=t; pendingUntil=Date.now()+15000;
   setSaveStatus('Sent '+t.toFixed(1)+' °C — waiting for ESP…','c-yel');
