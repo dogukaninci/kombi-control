@@ -305,6 +305,11 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
 
 <!-- LOG PAGE -->
 <div class="pg" id="pg-log">
+  <div class="mblok">
+    <div class="blok-lbl">Diagnostics report</div>
+    <button class="bbtn" onclick="downloadReport()">⬇ Download report (CSV)</button>
+    <div class="mstatus" id="reportInfo">Every 10-min cycle, the last 24 h of temperatures and the event log, in one file. Your phone or PC must be on the home Wi-Fi.</div>
+  </div>
   <div class="log-box">
     <div class="log-head">Live Log</div>
     <div class="log-body" id="logArea"></div>
@@ -988,6 +993,8 @@ function mqttConnect() {
 
         if (d.ip&&d.ip!==''&&d.ip!==espIP) {
           espIP=d.ip;
+          document.getElementById('reportInfo').textContent=
+            'Downloads http://'+espIP+'/export — every 10-min cycle, the last 24 h of temperatures and the event log. Your phone or PC must be on the home Wi-Fi.';
           log('ESP IP: '+espIP+' — fetching history & logs...','ok');
           fetchHistory(espIP);
           fetchLogs(espIP);
@@ -1064,6 +1071,14 @@ function sendSettings() {
   pendingTarget=t; pendingUntil=Date.now()+15000;
   setSaveStatus('Sent '+t.toFixed(1)+' °C — waiting for ESP…','c-yel');
   log('Settings → Target:'+t.toFixed(1)+'°C','ok');
+}
+
+// Opened as a new tab (top-level navigation), so an https page can still
+// reach the ESP's plain-http /export on the home network.
+function downloadReport() {
+  if (!espIP) { alert('ESP IP not known yet — wait for the first temperature reading.'); return; }
+  window.open('http://'+espIP+'/export','_blank');
+  log('Report requested from http://'+espIP+'/export','ok');
 }
 
 function resetLearning() {
