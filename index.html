@@ -120,42 +120,12 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
 .lock-badge{display:none;background:#3a1e00;color:var(--yel);font-size:.6rem;padding:4px 10px;
             border-radius:6px;border:1px solid #5a3200;margin-bottom:8px}
 
-/* SCHEDULE */
-.sched-toggle{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.sched-toggle label{font-size:.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;flex:1}
-.toggle-wrap{position:relative;width:36px;height:20px;flex-shrink:0;cursor:pointer}
-.toggle-wrap input{opacity:0;width:0;height:0;position:absolute}
-.toggle-track{position:absolute;inset:0;background:var(--brd2);border-radius:10px;transition:background .2s}
-.toggle-wrap input:checked + .toggle-track{background:var(--grn)}
-.toggle-thumb{position:absolute;top:3px;left:3px;width:14px;height:14px;background:#fff;
-              border-radius:50%;transition:transform .2s;pointer-events:none}
-.toggle-wrap input:checked ~ .toggle-thumb{transform:translateX(16px)}
+.tgt-row{display:flex;gap:6px;margin-bottom:8px}
+.tgt-step{width:52px;background:var(--bg3);border:1px solid var(--brd2);border-radius:var(--rs);
+          color:var(--text);font-family:'DM Mono',monospace;font-size:1.2rem;cursor:pointer}
+.tgt-step:active{background:var(--brd2)}
+.tgt-input{flex:1;text-align:center;font-size:1.4rem!important;padding:10px!important}
 
-.sched-slots{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
-.sched-slot{background:var(--bg);border:1px solid var(--brd);border-radius:var(--rs);padding:10px}
-.sched-slot.active-slot{border-color:var(--grn)}
-.slot-head{display:flex;align-items:center;gap:6px;margin-bottom:8px}
-.slot-badge{font-size:.55rem;font-weight:500;padding:2px 6px;border-radius:4px;
-            background:var(--bg3);color:var(--muted);border:1px solid var(--brd2)}
-.slot-badge.active{background:#0a2510;color:var(--grn);border-color:var(--grn)}
-.slot-badge.inactive{background:var(--bg3);color:var(--muted);border-color:var(--brd2)}
-.slot-time{display:flex;gap:4px;align-items:center;margin-bottom:6px}
-.slot-time input{width:46px;background:var(--bg2);border:1px solid var(--brd2);border-radius:var(--rs);
-                 color:var(--text);padding:5px 6px;font-family:'DM Mono',monospace;font-size:.8rem;
-                 text-align:center;-moz-appearance:textfield}
-.slot-time input::-webkit-outer-spin-button,
-.slot-time input::-webkit-inner-spin-button{-webkit-appearance:none}
-.slot-time input:focus{outline:none;border-color:var(--yel)}
-.slot-sep{color:var(--muted);font-size:.9rem;line-height:1}
-
-.sched-tz{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.sched-tz label{font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.sched-tz input{width:55px;background:var(--bg);border:1px solid var(--brd2);border-radius:var(--rs);
-                color:var(--text);padding:6px 8px;font-family:'DM Mono',monospace;font-size:.8rem;
-                -moz-appearance:textfield}
-.sched-tz input::-webkit-outer-spin-button,
-.sched-tz input::-webkit-inner-spin-button{-webkit-appearance:none}
-.sched-tz input:focus{outline:none;border-color:var(--yel)}
 .gcont{background:var(--bg2);border:1px solid var(--brd);border-radius:var(--r);
        padding:10px;margin-bottom:8px}
 .ghead{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:.58rem;color:var(--muted)}
@@ -271,13 +241,16 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
     </div>
   </div>
   <div class="rows">
-    <div class="row"><div class="rl">Thresholds</div><div class="rv c-blu" id="threshDisplay">—</div><div class="re">on › off</div></div>
-    <div class="row"><div class="rl">Relay RSSI</div><div class="rv" id="rssiValue">—</div><div class="re">WiFi signal</div></div>
+    <div class="row"><div class="rl">Duty</div><div class="rv c-ora" id="dutyDisplay">—</div><div class="re" id="cycleLeft">this cycle</div></div>
+    <div class="row"><div class="rl">Mode</div><div class="rv" id="modeRow">—</div><div class="re"></div></div>
     <div class="row"><div class="rl">Door</div><div class="rv" id="doorState">—</div><div class="re" id="doorSub">—</div></div>
-    <div class="row"><div class="rl">Mode</div><div class="rv" id="modeRow">—</div><div class="re c-yel" id="lockBadge2" style="display:none">⏳ locked</div></div>
-    <div class="row"><div class="rl">Min ON</div><div class="rv" id="minOnDisplay">—</div><div class="re">min</div></div>
-    <div class="row"><div class="rl">Min OFF</div><div class="rv" id="minOffDisplay">—</div><div class="re">min</div></div>
-    <div class="row"><div class="rl">Schedule</div><div class="rv" id="schedDisplay">—</div><div class="re" id="schedSlotDisplay">—</div></div>
+    <div class="row"><div class="rl">Relay RSSI</div><div class="rv" id="rssiValue">—</div><div class="re">WiFi signal</div></div>
+  </div>
+  <div class="rows">
+    <div class="row"><div class="rl">Heat rate</div><div class="rv c-ora" id="heatRate">—</div><div class="re">°C/h at 100 %</div></div>
+    <div class="row"><div class="rl">Heat loss</div><div class="rv c-blu" id="lossRate">—</div><div class="re">°C/h at 0 %</div></div>
+    <div class="row"><div class="rl">Base duty</div><div class="rv" id="baseDuty">—</div><div class="re">to hold temp</div></div>
+    <div class="row"><div class="rl">Learned</div><div class="rv" id="learnN">—</div><div class="re">cycles (10 min)</div></div>
   </div>
 </div>
 
@@ -294,123 +267,21 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
   </div>
 
   <div class="blok">
-    <div class="blok-lbl">Thermostat Settings</div>
-    <div class="lock-badge" id="lockBadge">⏳ Min run time not met</div>
-
-    <div class="afld" style="margin-bottom:8px">
-      <label>Target °C</label>
-      <input class="ainput" type="number" id="targetInput" value="22" min="15" max="29" step="0.5"
-             onfocus="focusIn(this)" onblur="focusOut(this)" oninput="updateThreshLabels()">
-    </div>
-
-    <div class="esik-preview">
-      <div class="ep-card">
-        <div class="ep-lbl">ON threshold</div>
-        <div class="ep-val on_" id="onThreshVal">—°C</div>
-      </div>
-      <div class="ep-card" style="background:var(--bg3);border-color:var(--brd2)">
-        <div class="ep-lbl">Target</div>
-        <div class="ep-val" style="color:var(--text)" id="targetPreview">—°C</div>
-      </div>
-      <div class="ep-card">
-        <div class="ep-lbl">OFF threshold</div>
-        <div class="ep-val off_" id="offThreshVal">—°C</div>
-      </div>
-    </div>
-
-    <div class="agrid">
-      <div class="afld">
-        <label>Low offset (±°C)</label>
-        <input class="ainput" type="number" id="lowOffset" value="-0.5" min="-3.0" max="3.0" step="0.1"
-               onfocus="focusIn(this)" onblur="focusOut(this)" oninput="updateThreshLabels()">
-        <div class="aesik" id="onThreshLabel">ON: —</div>
-      </div>
-      <div class="afld">
-        <label>High offset (±°C)</label>
-        <input class="ainput" type="number" id="highOffset" value="0.2" min="-3.0" max="3.0" step="0.1"
-               onfocus="focusIn(this)" onblur="focusOut(this)" oninput="updateThreshLabels()">
-        <div class="aesik" id="offThreshLabel">OFF: —</div>
-      </div>
-    </div>
-
-    <div class="agrid">
-      <div class="afld">
-        <label>Min ON (min)</label>
-        <input class="ainput" type="number" id="minOnInput" value="8" min="1" max="60" step="1"
-               onfocus="focusIn(this)" onblur="focusOut(this)">
-      </div>
-      <div class="afld">
-        <label>Min OFF (min)</label>
-        <input class="ainput" type="number" id="minOffInput" value="3" min="1" max="30" step="1"
-               onfocus="focusIn(this)" onblur="focusOut(this)">
-      </div>
+    <div class="blok-lbl">Target Temperature</div>
+    <div class="tgt-row">
+      <button class="tgt-step" onclick="stepTarget(-0.5)">−</button>
+      <input class="ainput tgt-input" type="number" id="targetInput" value="22" min="15" max="29" step="0.5"
+             onfocus="focusIn(this)" onblur="focusOut(this)">
+      <button class="tgt-step" onclick="stepTarget(0.5)">+</button>
     </div>
     <button class="sbtn" onclick="sendSettings()">Save → ESP</button>
+    <div class="mod-info">The boiler learns how fast the room heats up and cools down, and works out its own run time every 10 minutes.</div>
   </div>
 
-  <!-- SCHEDULE -->
   <div class="blok">
-    <div class="blok-lbl">Temperature Schedule</div>
-
-    <div class="sched-toggle">
-      <label>Enable schedule</label>
-      <label class="toggle-wrap">
-        <input type="checkbox" id="schedEnabled" onchange="schedToggleUI()">
-        <div class="toggle-track"></div>
-        <div class="toggle-thumb"></div>
-      </label>
-    </div>
-
-    <div id="schedBody">
-      <div class="sched-slots">
-        <!-- Slot A -->
-        <div class="sched-slot" id="slotACard">
-          <div class="slot-head">
-            <span class="slot-badge" id="slotABadge">Slot A</span>
-          </div>
-          <div style="font-size:.52rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Start time</div>
-          <div class="slot-time">
-            <input type="number" id="schedAHour" value="6"  min="0" max="23" step="1"
-                   onfocus="focusIn(this)" onblur="focusOut(this)">
-            <span class="slot-sep">:</span>
-            <input type="number" id="schedAMin"  value="0"  min="0" max="59" step="1"
-                   onfocus="focusIn(this)" onblur="focusOut(this)">
-          </div>
-          <div class="afld">
-            <label>Target °C</label>
-            <input class="ainput" type="number" id="schedATarget" value="22" min="15" max="29" step="0.5"
-                   onfocus="focusIn(this)" onblur="focusOut(this)">
-          </div>
-        </div>
-        <!-- Slot B -->
-        <div class="sched-slot" id="slotBCard">
-          <div class="slot-head">
-            <span class="slot-badge" id="slotBBadge">Slot B</span>
-          </div>
-          <div style="font-size:.52rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Start time</div>
-          <div class="slot-time">
-            <input type="number" id="schedBHour" value="22" min="0" max="23" step="1"
-                   onfocus="focusIn(this)" onblur="focusOut(this)">
-            <span class="slot-sep">:</span>
-            <input type="number" id="schedBMin"  value="0"  min="0" max="59" step="1"
-                   onfocus="focusIn(this)" onblur="focusOut(this)">
-          </div>
-          <div class="afld">
-            <label>Target °C</label>
-            <input class="ainput" type="number" id="schedBTarget" value="18" min="15" max="29" step="0.5"
-                   onfocus="focusIn(this)" onblur="focusOut(this)">
-          </div>
-        </div>
-      </div>
-
-      <div class="sched-tz">
-        <label>UTC Offset (hours)</label>
-        <input type="number" id="tzOffset" value="3" min="-12" max="14" step="1"
-               onfocus="focusIn(this)" onblur="focusOut(this)">
-      </div>
-    </div>
-
-    <button class="sbtn" onclick="sendSchedule()">Save Schedule → ESP</button>
+    <div class="blok-lbl">Learning</div>
+    <div class="mod-info" style="margin-top:0;padding-top:0;border:none" id="learnInfo">—</div>
+    <button class="bbtn" style="margin-top:8px" onclick="resetLearning()">Reset learning</button>
   </div>
 </div>
 
@@ -716,7 +587,7 @@ function findTooltip(px, cw) {
 // ════════════════════════════════════════════
 // CHART — DRAW
 // ════════════════════════════════════════════
-let grafTarget=null, grafOnThr=null, grafOffThr=null;
+let grafTarget=null;
 
 function drawChart() {
   const canvas=document.getElementById('chart'); if (!canvas) return;
@@ -739,8 +610,6 @@ function drawChart() {
   }
 
   let tMin=Math.min(...vis.map(d=>d.t)), tMax=Math.max(...vis.map(d=>d.t));
-  if (grafOnThr!==null)  { tMin=Math.min(tMin,grafOnThr);  tMax=Math.max(tMax,grafOnThr);  }
-  if (grafOffThr!==null) { tMin=Math.min(tMin,grafOffThr); tMax=Math.max(tMax,grafOffThr); }
   if (grafTarget!==null) { tMin=Math.min(tMin,grafTarget); tMax=Math.max(tMax,grafTarget); }
   tMin=Math.floor(tMin-0.3); tMax=Math.ceil(tMax+0.3);
   const tR=tMax-tMin||1;
@@ -800,8 +669,6 @@ function drawChart() {
     ctx.fillStyle=color;ctx.fillText(label,P.l+gW-2,y-2);
   }
   drawThreshLine(grafTarget,  'rgba(251,191,36,0.6)', grafTarget!==null?grafTarget.toFixed(1)+'°':'');
-  drawThreshLine(grafOnThr,   'rgba(56,189,248,0.5)', grafOnThr!==null?grafOnThr.toFixed(2)+'on':'');
-  drawThreshLine(grafOffThr,  'rgba(249,115,22,0.5)', grafOffThr!==null?grafOffThr.toFixed(2)+'off':'');
 
   // "Now" line
   if (view.offset===0) {
@@ -966,20 +833,39 @@ function log(msg, type='') {
 }
 
 // ════════════════════════════════════════════
-// THRESHOLD LABELS
+// TARGET STEP BUTTONS
 // ════════════════════════════════════════════
-function updateThreshLabels() {
-  const t=parseFloat(document.getElementById('targetInput').value);
-  const lo=parseFloat(document.getElementById('lowOffset').value);
-  const hi=parseFloat(document.getElementById('highOffset').value);
-  if (isNaN(t)||isNaN(lo)||isNaN(hi)) return;
-  const on=(t+lo).toFixed(2), off=(t+hi).toFixed(2);
-  document.getElementById('onThreshLabel').textContent  = 'ON:  '+on+'°C';
-  document.getElementById('offThreshLabel').textContent = 'OFF: '+off+'°C';
-  document.getElementById('threshDisplay').textContent  = on+' › '+off;
-  document.getElementById('onThreshVal').textContent    = on+'°C';
-  document.getElementById('offThreshVal').textContent   = off+'°C';
-  document.getElementById('targetPreview').textContent  = t.toFixed(1)+'°C';
+function stepTarget(delta) {
+  const el=document.getElementById('targetInput');
+  const v=parseFloat(el.value)||22;
+  el.value=Math.min(29,Math.max(15,Math.round((v+delta)*2)/2)).toFixed(1);
+}
+
+// ════════════════════════════════════════════
+// TPI / LEARNING UI
+// ════════════════════════════════════════════
+function updateTpiUI(d) {
+  const auto=(d.mode||'auto')==='auto';
+  if (d.duty!==undefined) {
+    document.getElementById('dutyDisplay').textContent = auto ? Math.round(d.duty*100)+' %' : '—';
+    const left=d.cycle_left_s||0;
+    document.getElementById('cycleLeft').textContent =
+      auto&&left ? 'next cycle in '+Math.floor(left/60)+':'+String(left%60).padStart(2,'0') : 'this cycle';
+  }
+  if (d.heat_rate!==undefined) document.getElementById('heatRate').textContent=d.heat_rate.toFixed(2);
+  if (d.loss_rate!==undefined) document.getElementById('lossRate').textContent=d.loss_rate.toFixed(2);
+  if (d.heat_rate&&d.loss_rate!==undefined)
+    document.getElementById('baseDuty').textContent=Math.round(Math.min(1,d.loss_rate/d.heat_rate)*100)+' %';
+  if (d.learn_n!==undefined) {
+    document.getElementById('learnN').textContent=d.learn_n;
+    const n=d.learn_n;
+    const stage=n<6?'Just started — still using defaults.'
+               :n<36?'Learning — control improves over the first day.'
+               :'Learned — keeps adapting to the weather and the house.';
+    document.getElementById('learnInfo').textContent=
+      stage+' Heats '+d.heat_rate.toFixed(2)+' °C/h at full power, loses '
+      +d.loss_rate.toFixed(2)+' °C/h when off ('+n+' cycles).';
+  }
 }
 
 // ════════════════════════════════════════════
@@ -1051,24 +937,7 @@ function mqttConnect() {
           safeSet('targetInput',d.target.toFixed(1));
           grafTarget=d.target;
         }
-        if (d.low_offset!==undefined)  safeSet('lowOffset',  d.low_offset.toFixed(2));
-        if (d.high_offset!==undefined) safeSet('highOffset', d.high_offset.toFixed(2));
-        updateThreshLabels();
-
-        if (d.on_threshold!==undefined&&d.off_threshold!==undefined) {
-          grafOnThr  = d.on_threshold;
-          grafOffThr = d.off_threshold;
-          document.getElementById('threshDisplay').textContent =
-            d.on_threshold.toFixed(2)+' › '+d.off_threshold.toFixed(2);
-          document.getElementById('onThreshLabel').textContent  = 'ON:  '+d.on_threshold.toFixed(2)+'°C';
-          document.getElementById('offThreshLabel').textContent = 'OFF: '+d.off_threshold.toFixed(2)+'°C';
-          document.getElementById('onThreshVal').textContent    = d.on_threshold.toFixed(2)+'°C';
-          document.getElementById('offThreshVal').textContent   = d.off_threshold.toFixed(2)+'°C';
-        }
-
-        const locked=d.time_locked;
-        document.getElementById('lockBadge').style.display  = locked?'block':'none';
-        document.getElementById('lockBadge2').style.display = locked?'inline':'none';
+        updateTpiUI(d);
 
         if (d.boiler!==undefined) {
           const el=document.getElementById('boilerState');
@@ -1087,12 +956,7 @@ function mqttConnect() {
           el.textContent=d.bat;
           el.className=d.bat<15?'c-red':d.bat<40?'c-yel':'';
         }
-        if (d.min_on_min!==undefined)  { safeSet('minOnInput',d.min_on_min);   document.getElementById('minOnDisplay').textContent=d.min_on_min; }
-        if (d.min_off_min!==undefined) { safeSet('minOffInput',d.min_off_min); document.getElementById('minOffDisplay').textContent=d.min_off_min; }
         if (d.mode) updateModeUI(d.mode);
-
-        // Schedule UI sync
-        updateScheduleUI(d);
 
         if (d.t!==undefined&&d.boiler!==undefined) addPoint(d.t, d.boiler);
 
@@ -1106,11 +970,11 @@ function mqttConnect() {
         document.getElementById('lastUpdate').textContent=
           new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
-        log('T:'+d.t?.toFixed(1)+'°C ['+d.on_threshold?.toFixed(2)+'/'+d.off_threshold?.toFixed(2)+']'
+        log('T:'+d.t?.toFixed(1)+'°C → '+d.target?.toFixed(1)
+          +' duty:'+(d.duty!==undefined?Math.round(d.duty*100)+'%':'?')
           +' B:'+(d.boiler?'ON':'OFF')
           +' D:'+(d.door?'⚠️':'ok')
-          +' M:'+(d.mode||'?')
-          +(d.time_locked?' ⏳':''));
+          +' M:'+(d.mode||'?'));
       }
 
       // ─── Heartbeat ───
@@ -1167,105 +1031,23 @@ function sendMode(mode) {
 
 function sendSettings() {
   if (!client?.connected){alert('MQTT not connected!');return;}
-  const t  =parseFloat(document.getElementById('targetInput').value);
-  const lo =parseFloat(document.getElementById('lowOffset').value);
-  const hi =parseFloat(document.getElementById('highOffset').value);
-  const mon=parseInt(document.getElementById('minOnInput').value);
-  const mof=parseInt(document.getElementById('minOffInput').value);
-  if (t<15||t>29)      {alert('Target must be 15–29°C');return;}
-  if (lo>=hi)          {alert('Low offset must be < high offset');return;}
-  if (lo<-3||lo>3)     {alert('Low offset: -3.0 to +3.0');return;}
-  if (hi<-3||hi>3)     {alert('High offset: -3.0 to +3.0');return;}
-  if (mon<1||mon>60)   {alert('Min ON: 1–60 min');return;}
-  if (mof<1||mof>30)   {alert('Min OFF: 1–30 min');return;}
-  client.publish(deviceId+'/settings', JSON.stringify({
-    target:t, low_offset:lo, high_offset:hi, min_on_min:mon, min_off_min:mof
-  }));
-  log('Settings → Target:'+t+'°C  ON:'+(t+lo).toFixed(2)+'  OFF:'+(t+hi).toFixed(2)
-    +'  MinON:'+mon+'min  MinOFF:'+mof+'min','ok');
+  const t=parseFloat(document.getElementById('targetInput').value);
+  if (isNaN(t)||t<15||t>29) {alert('Target must be 15–29°C');return;}
+  client.publish(deviceId+'/settings', JSON.stringify({target:t}));
+  log('Settings → Target:'+t.toFixed(1)+'°C','ok');
 }
 
-function sendSchedule() {
+function resetLearning() {
   if (!client?.connected){alert('MQTT not connected!');return;}
-  const en   = document.getElementById('schedEnabled').checked;
-  const ah   = parseInt(document.getElementById('schedAHour').value);
-  const am   = parseInt(document.getElementById('schedAMin').value);
-  const at_  = parseFloat(document.getElementById('schedATarget').value);
-  const bh   = parseInt(document.getElementById('schedBHour').value);
-  const bm   = parseInt(document.getElementById('schedBMin').value);
-  const bt   = parseFloat(document.getElementById('schedBTarget').value);
-  const tz   = parseInt(document.getElementById('tzOffset').value);
-  if (isNaN(ah)||ah<0||ah>23) {alert('Slot A hour: 0–23');return;}
-  if (isNaN(am)||am<0||am>59) {alert('Slot A minute: 0–59');return;}
-  if (isNaN(bh)||bh<0||bh>23) {alert('Slot B hour: 0–23');return;}
-  if (isNaN(bm)||bm<0||bm>59) {alert('Slot B minute: 0–59');return;}
-  if (at_<15||at_>29)         {alert('Slot A target: 15–29°C');return;}
-  if (bt<15||bt>29)           {alert('Slot B target: 15–29°C');return;}
-  if (tz<-12||tz>14)          {alert('UTC offset: -12 to +14');return;}
-  if (ah*60+am === bh*60+bm)  {alert('Slots A and B cannot start at the same time');return;}
-  client.publish(deviceId+'/settings', JSON.stringify({
-    sched_enabled:en,
-    sched_a_hour:ah, sched_a_min:am, sched_a_target:at_,
-    sched_b_hour:bh, sched_b_min:bm, sched_b_target:bt,
-    tz_offset:tz
-  }));
-  const fmt=h=>String(h).padStart(2,'0');
-  log('Schedule → '+(en?'ON':'OFF')
-    +' | A='+fmt(ah)+':'+fmt(am)+'→'+at_+'°C'
-    +' | B='+fmt(bh)+':'+fmt(bm)+'→'+bt+'°C'
-    +' | TZ:'+tz,'ok');
-}
-
-function schedToggleUI() {
-  const en = document.getElementById('schedEnabled').checked;
-  document.getElementById('schedBody').style.opacity = en ? '1' : '0.45';
-}
-
-function updateScheduleUI(d) {
-  if (d.sched_enabled === undefined) return;
-  const en = d.sched_enabled;
-  document.getElementById('schedEnabled').checked = en;
-  schedToggleUI();
-  if (d.sched_a_hour  !== undefined) safeSet('schedAHour',   d.sched_a_hour);
-  if (d.sched_a_min   !== undefined) safeSet('schedAMin',    d.sched_a_min);
-  if (d.sched_a_target!== undefined) safeSet('schedATarget', d.sched_a_target.toFixed(1));
-  if (d.sched_b_hour  !== undefined) safeSet('schedBHour',   d.sched_b_hour);
-  if (d.sched_b_min   !== undefined) safeSet('schedBMin',    d.sched_b_min);
-  if (d.sched_b_target!== undefined) safeSet('schedBTarget', d.sched_b_target.toFixed(1));
-  if (d.tz_offset     !== undefined) safeSet('tzOffset',     d.tz_offset);
-
-  // Active slot badges
-  const activeSlot = d.sched_active;  // 0=A, 1=B
-  const aActive = en && activeSlot === 0;
-  const bActive = en && activeSlot === 1;
-  document.getElementById('slotABadge').className = 'slot-badge '+(aActive?'active':'inactive');
-  document.getElementById('slotABadge').textContent = 'Slot A'+(aActive?' ●':'');
-  document.getElementById('slotBBadge').className = 'slot-badge '+(bActive?'active':'inactive');
-  document.getElementById('slotBBadge').textContent = 'Slot B'+(bActive?' ●':'');
-  document.getElementById('slotACard').classList.toggle('active-slot', aActive);
-  document.getElementById('slotBCard').classList.toggle('active-slot', bActive);
-
-  // Status row
-  if (d.sched_enabled !== undefined) {
-    const schedEl = document.getElementById('schedDisplay');
-    schedEl.textContent = en ? 'Enabled' : 'Disabled';
-    schedEl.className   = 'rv '+(en ? 'c-grn' : 'c-muted');
-    const fmt = h => String(h).padStart(2,'0');
-    if (en && d.sched_a_hour !== undefined) {
-      const slotName = activeSlot === 0 ? 'A' : 'B';
-      const slotTarget = activeSlot === 0 ? d.sched_a_target : d.sched_b_target;
-      document.getElementById('schedSlotDisplay').textContent =
-        'Slot '+slotName+' active ('+slotTarget?.toFixed(1)+'°C)';
-    } else {
-      document.getElementById('schedSlotDisplay').textContent = '';
-    }
-  }
+  if (!confirm('Forget everything the thermostat has learned and start over?')) return;
+  client.publish(deviceId+'/settings', JSON.stringify({tpi_reset:true}));
+  log('TPI learning reset requested','wa');
 }
 
 function clearHistory() {
   if (!confirm('Clear chart history?')) return;
   history_=[]; lastAddMs=0; espIP=null; tooltipTs=null;
-  grafTarget=null; grafOnThr=null; grafOffThr=null;
+  grafTarget=null;
   try{localStorage.removeItem(LS_KEY);}catch(e){}
   drawChart(); log('Chart history cleared','wa');
 }
@@ -1274,7 +1056,6 @@ function clearHistory() {
 // INIT
 // ════════════════════════════════════════════
 window.onload=()=>{
-  updateThreshLabels();
   updateZoomBadge();
   resizeChart();
   mqttConnect();
