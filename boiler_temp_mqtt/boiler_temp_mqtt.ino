@@ -85,6 +85,9 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_KICK_ERR          0.2f   // after a target raise, heat at once if this far below
 #define TPI_UNDERSHOOT_KICK   0.3f   // any cycle: this far below target → no skipping the min pulse
 #define TPI_GAIN_SLOPE        0.3f   // °C/h rise with the boiler off = sun/cooking, not heat loss
+#define TPI_RAD_TAU_MIN       12.0f  // radiator lag: the learner's estimate of radiator heat
+                                     // follows the boiler with this time constant (see simulation)
+#define TPI_RAD_COLD          0.1f   // radiator estimate below this counts as "boiler off"
 
 // ================= SYSTEM CONSTANTS =================
 // Door / window detection. The DHT22 reacts slowly, so look for a sustained
@@ -241,6 +244,13 @@ bool          tpiKick        = false;  // user just raised the target
 float         uAvg           = -1.0f;  // running average of learning duty (<0 = unset)
 double        sX = 0, sY = 0, sXX = 0, sXY = 0;  // slope regression sums
 uint16_t      sN = 0;
+// Radiator heat estimate (0–1): the boiler state through a first-order lag.
+// Learning uses its cycle average instead of the raw duty, so heat still
+// coming out of the radiators after a burn isn't mistaken for "no heat loss".
+float         radHeat = 0.0f;
+unsigned long radLastMs = 0;
+double        radSum = 0;
+uint16_t      radN = 0;
 // ──────────────────────────────────────────────────────────
 
 // History tracking
@@ -641,6 +651,8 @@ void httpExportHandler() {
   snprintf(line, sizeof(line), "cycle_min,%lu", TPI_CYCLE_MS / 60000);             exportLine(line);
   snprintf(line, sizeof(line), "min_on_s,%lu", TPI_MIN_ON_MS / 1000);              exportLine(line);
   snprintf(line, sizeof(line), "min_off_s,%lu", TPI_MIN_OFF_MS / 1000);            exportLine(line);
+  snprintf(line, sizeof(line), "radiator_tau_min,%.0f", TPI_RAD_TAU_MIN);          exportLine(line);
+  snprintf(line, sizeof(line), "radiator_now,%.2f", radHeat);                      exportLine(line);
   snprintf(line, sizeof(line), "overshoot_c,%.2f", TPI_OVERSHOOT);                 exportLine(line);
   snprintf(line, sizeof(line), "excite,%.2f", TPI_EXCITE);                         exportLine(line);
   snprintf(line, sizeof(line), "door_slope_open_c_per_min,%.2f", DOOR_SLOPE_OPEN); exportLine(line);
@@ -934,12 +946,14 @@ void tpiEndCycle() {
     if (den > 1e-9) {
       slope = (float)((sN * sXY - sX * sY) / den);   // °C/h
       if (fabsf(slope) <= RLS_MAX_SLOPE) {
-        // Radiators lag: the slope reflects this and the previous cycle
-        float uEff = 0.6f * actualDuty + 0.4f * prevActualDuty;
-        if (uEff <= 0.0f && slope > TPI_GAIN_SLOPE) {
-          // Warming with the boiler off can only be free heat (sun, cooking,
-          // people). Learning from it drove L to 0 on 7 Nov and the boiler
-          // then reacted far too late in the evening — so skip these cycles.
+        // Radiators lag: learn against the average radiator heat estimate of
+        // this cycle, not the boiler's ON time. The old 0.6/0.4 duty weighting
+        // was too short for this flat's radiators and dragged H and L down.
+        float uEff = radN ? (float)(radSum / radN) : 0.6f * actualDuty + 0.4f * prevActualDuty;
+        if (uEff < TPI_RAD_COLD && slope > TPI_GAIN_SLOPE + heatRate * uEff) {
+          // Warming with cold radiators, more than their leftover heat explains,
+          // can only be free heat (sun, cooking, people). Learning from it drove
+          // L to 0 on 7 Nov and the boiler then reacted far too late — skip it.
           Serial.printf("[TPI] +%.2f°C/h with boiler off — free heat, not learned\n", slope);
           flags |= CF_GAIN;
         } else {
@@ -1019,7 +1033,7 @@ void tpiStartCycle(unsigned long now) {
   cycleDuty      = duty;
   cycleStartTemp = temperature;
   cycleCut       = false;
-  sX = sY = sXX = sXY = 0; sN = 0;
+  sX = sY = sXX = sXY = 0; sN = 0; radSum = 0; radN = 0;
 
   Serial.printf("[TPI] New cycle: T=%.1f target=%.1f duty=%.2f (base=%.2f Kp=%.2f I=%.3f carry=%.2f) on=%lus%s\n",
     temperature, target, duty, lossRate / heatRate, tpiKp(), integ, dutyCarry, onMs / 1000,
@@ -1035,6 +1049,7 @@ bool tpiControl() {
   // Slope regression sample (x in hours since cycle start)
   double x = (now - cycleStartMs) / 3600000.0;
   sX += x; sY += temperature; sXX += x * x; sXY += x * temperature; sN++;
+  radSum += radHeat; radN++;
 
   bool inOnWindow = (now - cycleStartMs) < cycleOnMs;
 
@@ -1141,6 +1156,14 @@ void sensorUpdate() {
 
   doorDetect();
 
+  // Radiator estimate: move toward the boiler state of the last interval
+  unsigned long nowMs = millis();
+  if (radLastMs) {
+    float dtMin = (nowMs - radLastMs) / 60000.0f;
+    radHeat += ((boilerOn ? 1.0f : 0.0f) - radHeat) * (1.0f - expf(-dtMin / TPI_RAD_TAU_MIN));
+  }
+  radLastMs = nowMs;
+
   bool newBoiler = boilerDecision();
   if (newBoiler != boilerOn) {
     Serial.printf("[BOILER] %s\n", newBoiler ? "ON" : "OFF");
@@ -1168,7 +1191,7 @@ void sensorUpdate() {
     "\"duty\":%.2f,\"cycle_left_s\":%lu,"
     "\"reason\":\"%s\",\"cycle_on_s\":%lu,\"carry\":%.2f,"
     "\"min_on_s\":%lu,\"min_off_s\":%lu,"
-    "\"heat_rate\":%.2f,\"loss_rate\":%.2f,"
+    "\"heat_rate\":%.2f,\"loss_rate\":%.2f,\"rad\":%.2f,"
     "\"kp\":%.3f,\"integ\":%.3f,\"learn_n\":%u,"
     "\"on_min\":%.1f,\"off_min\":%.1f,"
     "\"ip\":\"%s\""
@@ -1181,7 +1204,7 @@ void sensorUpdate() {
     tpiRun ? cycleDuty : 0.0f, tpiRun ? tpiCycleLeftS() : 0UL,
     boilerReason(), tpiRun ? cycleOnMs / 1000 : 0UL, dutyCarry,
     TPI_MIN_ON_MS / 1000, TPI_MIN_OFF_MS / 1000,
-    heatRate, lossRate,
+    heatRate, lossRate, radHeat,
     tpiKp(), integ, learnN,
     onMin, offMin,
     espIP
