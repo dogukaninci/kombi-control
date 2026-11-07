@@ -67,14 +67,14 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_OVERSHOOT         0.4f   // T >= target + this → boiler off now
 #define TPI_FULL_ON_ERR       2.0f   // T <= target − this → 100 % duty
 #define TPI_MIN_SAMPLES       100    // samples needed to learn from a cycle
-#define TPI_SAVE_EVERY        6      // persist learned model every N cycles (~1 h)
+#define TPI_SAVE_EVERY        3      // persist learned model every N cycles (~30 min)
 
 // Learned model defaults and sane bounds
 #define HEAT_DEFAULT          2.0f   // °C/h at 100 %
 #define LOSS_DEFAULT          0.5f   // °C/h at 0 %
 #define HEAT_MIN              0.3f
 #define HEAT_MAX              8.0f
-#define LOSS_MIN              0.0f
+#define LOSS_MIN              0.2f   // a heated home always loses some heat; 0 came from sunny days
 #define LOSS_MAX              4.0f
 #define RLS_LAMBDA            0.97f  // forgetting factor (~33 cycles ≈ 5.5 h memory)
 #define RLS_MAX_SLOPE         6.0f   // |°C/h| — larger slopes are outliers (door, sun…)
@@ -83,6 +83,8 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_LOSS_GAIN         0.1f   // gain for loss-only updates under steady load
 #define TPI_CARRY_MAX         0.5f   // max duty carried between cycles
 #define TPI_KICK_ERR          0.2f   // after a target raise, heat at once if this far below
+#define TPI_UNDERSHOOT_KICK   0.3f   // any cycle: this far below target → no skipping the min pulse
+#define TPI_GAIN_SLOPE        0.3f   // °C/h rise with the boiler off = sun/cooking, not heat loss
 
 // ================= SYSTEM CONSTANTS =================
 // Door / window detection. The DHT22 reacts slowly, so look for a sustained
@@ -184,6 +186,7 @@ struct __attribute__((packed)) CycleRecord {   // 46 bytes
 #define CF_ABORTED     0x10   // ended early (mode/target change, door)
 #define CF_CUT         0x20   // overshoot cut the ON pulse
 #define CF_DOOR        0x40   // aborted because a door/window opened
+#define CF_GAIN        0x80   // not learned: room warmed with the boiler off (sun etc.)
 
 // ================= OBJECTS =================
 DHT              dht(DHTPIN, DHTTYPE);
@@ -642,7 +645,7 @@ void httpExportHandler() {
   snprintf(line, sizeof(line), "excite,%.2f", TPI_EXCITE);                         exportLine(line);
   snprintf(line, sizeof(line), "door_slope_open_c_per_min,%.2f", DOOR_SLOPE_OPEN); exportLine(line);
   snprintf(line, sizeof(line), "door_drop_open_c,%.2f", DOOR_DROP_OPEN);           exportLine(line);
-  exportLine("flags_legend,full=H+L learned;loss=only L learned;rejected=slope outlier;nolearn=not used for learning;aborted=ended early;cut=overshoot cut ON pulse;door=aborted by door/window");
+  exportLine("flags_legend,full=H+L learned;loss=only L learned;rejected=slope outlier;nolearn=not used for learning;aborted=ended early;cut=overshoot cut ON pulse;door=aborted by door/window;gain=not learned - room warmed with boiler off");
 
   // ---- cycles ----
   exportLine("");
@@ -661,6 +664,7 @@ void httpExportHandler() {
       if (r.flags & CF_ABORTED)    strcat(fl, "aborted ");
       if (r.flags & CF_CUT)        strcat(fl, "cut ");
       if (r.flags & CF_DOOR)       strcat(fl, "door ");
+      if (r.flags & CF_GAIN)       strcat(fl, "gain ");
       size_t fll = strlen(fl); if (fll) fl[fll - 1] = '\0';
       snprintf(line, sizeof(line), "%lu,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.4f,%u,%s",
                (unsigned long)r.ts, r.target, r.tStart, r.tEnd, r.duty, r.actual, r.carry,
@@ -932,10 +936,18 @@ void tpiEndCycle() {
       if (fabsf(slope) <= RLS_MAX_SLOPE) {
         // Radiators lag: the slope reflects this and the previous cycle
         float uEff = 0.6f * actualDuty + 0.4f * prevActualDuty;
-        bool excited = (uAvg < 0.0f) || fabsf(uEff - uAvg) >= TPI_EXCITE;
-        uAvg = (uAvg < 0.0f) ? uEff : 0.8f * uAvg + 0.2f * uEff;
-        if (excited) { tpiLearn(uEff, slope);         flags |= CF_LEARN_FULL; }
-        else         { tpiLearnLossOnly(uEff, slope); flags |= CF_LEARN_LOSS; }
+        if (uEff <= 0.0f && slope > TPI_GAIN_SLOPE) {
+          // Warming with the boiler off can only be free heat (sun, cooking,
+          // people). Learning from it drove L to 0 on 7 Nov and the boiler
+          // then reacted far too late in the evening — so skip these cycles.
+          Serial.printf("[TPI] +%.2f°C/h with boiler off — free heat, not learned\n", slope);
+          flags |= CF_GAIN;
+        } else {
+          bool excited = (uAvg < 0.0f) || fabsf(uEff - uAvg) >= TPI_EXCITE;
+          uAvg = (uAvg < 0.0f) ? uEff : 0.8f * uAvg + 0.2f * uEff;
+          if (excited) { tpiLearn(uEff, slope);         flags |= CF_LEARN_FULL; }
+          else         { tpiLearnLossOnly(uEff, slope); flags |= CF_LEARN_LOSS; }
+        }
       } else {
         Serial.printf("[TPI] Slope %.2f°C/h rejected (outlier)\n", slope);
         flags |= CF_REJECTED;
@@ -978,6 +990,13 @@ void tpiStartCycle(unsigned long now) {
       Serial.println("[TPI] Target raised — minimum pulse now");
     }
     tpiKick = false;
+  }
+  // Clearly below target (e.g. after airing the room): don't keep waiting for
+  // the demand to reach the 5-min minimum. Rarely fires in normal operation
+  // (simulation: 150 → 152 starts in 4 days).
+  if (onMs == 0 && duty > 0.0f && err >= TPI_UNDERSHOOT_KICK) {
+    onMs = TPI_MIN_ON_MS;
+    Serial.printf("[TPI] %.1f°C below target — minimum pulse now\n", err);
   }
   dutyCarry = constrain(duty + dutyCarry - (float)onMs / TPI_CYCLE_MS,
                         -TPI_CARRY_MAX, TPI_CARRY_MAX);

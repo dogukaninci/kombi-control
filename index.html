@@ -883,7 +883,10 @@ function reasonText(d) {
     case 'short':      return ['⏳ Waiting — this cycle needs only '+needMin+' min, below the '+Math.round(minOn/60)
                                +'-min minimum. It is carried over; next cycle in '+mmss(left),'c-yel'];
     case 'cycle_off':  return ['✓ Ran '+mmss(onS)+' this cycle — off until the next cycle in '+mmss(left),''];
-    case 'warm':       return ['✓ No heat needed — room is at or above target','c-grn'];
+    case 'warm':       return (d.t!==undefined && d.target!==undefined && d.t < d.target)
+                         // The decision is taken at cycle start; the room may have cooled since
+                         ? ['… Not heating this cycle — 0 % was requested when it started; re-checks in '+mmss(left),'']
+                         : ['✓ No heat needed — room is at or above target','c-grn'];
     case 'overshoot':  return ['✋ Stopped early — room went 0.4 °C over target','c-yel'];
     case 'door':       return ['🚪 Door/window open — heating paused until the temperature stops falling','c-yel'];
     case 'manual_on':  return ['🔥 Force On mode','c-ora'];
