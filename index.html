@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Boiler</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
@@ -310,7 +311,7 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
   <div class="mblok">
     <div class="blok-lbl">Diagnostics report</div>
     <button class="bbtn" onclick="downloadReport()">⬇ Download report (CSV)</button>
-    <div class="mstatus" id="reportInfo">Every 10-min cycle, the last 24 h of temperatures and the event log, in one file. Your phone or PC must be on the home Wi-Fi.</div>
+    <div class="mstatus" id="reportInfo">Opens the ESP's own page; tap "Download report" there. Your phone or PC must be on the home Wi-Fi.</div>
   </div>
   <div class="log-box">
     <div class="log-head">Live Log</div>
@@ -1028,10 +1029,12 @@ function mqttConnect() {
         if (d.ip&&d.ip!==''&&d.ip!==espIP) {
           espIP=d.ip;
           document.getElementById('reportInfo').textContent=
-            'Downloads http://'+espIP+'/export — every 10-min cycle, the last 24 h of temperatures and the event log. Your phone or PC must be on the home Wi-Fi.';
-          log('ESP IP: '+espIP+' — fetching history & logs...','ok');
-          fetchHistory(espIP);
-          fetchLogs(espIP);
+            'Opens http://'+espIP+'/ — tap "Download report" there (every 10-min cycle, the last 24 h of temperatures and the event log). Your phone or PC must be on the home Wi-Fi.';
+          log('ESP IP: '+espIP,'ok');
+          // An https page (GitHub Pages) can't fetch from the ESP's plain http —
+          // the browser blocks it as mixed content, so don't even try there.
+          if (location.protocol !== 'https:') { fetchHistory(espIP); fetchLogs(espIP); }
+          else log('History/log from the ESP are only loaded when this page is opened over http (local copy).','');
         }
 
         document.getElementById('lastUpdate').textContent=
@@ -1112,7 +1115,9 @@ function sendSettings() {
 // reach the ESP's plain-http /export on the home network.
 function downloadReport() {
   if (!espIP) { alert('ESP IP not known yet — wait for the first temperature reading.'); return; }
-  window.open('http://'+espIP+'/export','_blank');
+  // Open the ESP's own http page; the download is started from there, which
+  // Chrome allows (a download started from this https page is blocked).
+  window.open('http://'+espIP+'/','_blank');
   log('Report requested from http://'+espIP+'/export','ok');
 }
 

@@ -710,7 +710,36 @@ void httpExportHandler() {
   Serial.println("[HTTP] /export sent");
 }
 
+// GET /  — tiny page on the ESP itself. The https dashboard (GitHub Pages)
+// can't start an http download (Chrome blocks it as mixed content), but it
+// can open this http page, and a download started from here is allowed.
+void httpRootHandler() {
+  time_t now_t = 0; time(&now_t);
+  char page[1400];
+  snprintf(page, sizeof(page),
+    "<!doctype html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Boiler ESP</title><link rel='icon' href='data:,'>"
+    "<style>body{font-family:system-ui,sans-serif;background:#0a0e17;color:#e2e8f0;"
+    "max-width:420px;margin:0 auto;padding:24px 16px}"
+    "a.b{display:block;text-align:center;background:#f97316;color:#fff;text-decoration:none;"
+    "padding:14px;border-radius:10px;font-weight:600;margin:16px 0}"
+    "a.s{color:#38bdf8}.m{color:#4a6080;font-size:.85rem;line-height:1.5}</style></head><body>"
+    "<h2>&#128293; Boiler ESP</h2>"
+    "<p class='m'>Firmware %s &middot; IP %s &middot; up %lu min<br>"
+    "Target %.1f &deg;C &middot; now %.1f &deg;C &middot; learned cycles %u</p>"
+    "<a class='b' href='/export'>&#11015; Download report (CSV)</a>"
+    "<p class='m'>If Chrome says the download is insecure, open the downloads list "
+    "(Ctrl+J) and choose <b>Keep</b>. The file stays on your device.</p>"
+    "<p class='m'>Raw data: <a class='s' href='/status'>/status</a> &middot; "
+    "<a class='s' href='/logs'>/logs</a> &middot; <a class='s' href='/history'>/history</a></p>"
+    "</body></html>",
+    FW_VERSION, espIP, millis() / 60000, target, temperature, learnN);
+  httpServer.send(200, "text/html; charset=utf-8", page);
+}
+
 void httpServerStart() {
+  httpServer.on("/",        HTTP_GET, httpRootHandler);
   httpServer.on("/history", HTTP_GET, httpHistoryHandler);
   httpServer.on("/status",  HTTP_GET, httpStatusHandler);
   httpServer.on("/logs",    HTTP_GET, httpLogsHandler);

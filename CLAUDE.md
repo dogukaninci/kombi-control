@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A two-ESP32 home boiler ("kombi") thermostat plus a single-file web dashboard, all talking over a public MQTT broker (`broker.hivemq.com`). There is no build system, package manager, test suite or git repo — just two Arduino sketches and one HTML file.
+A two-ESP32 home boiler ("kombi") thermostat plus a single-file web dashboard, all talking over a public MQTT broker (`broker.hivemq.com`). There is no build system, package manager or test suite — just two Arduino sketches and one HTML file.
 
 - `boiler_temp_mqtt/boiler_temp_mqtt.ino`: the **brain**. Reads a DHT22, runs all control logic, drives a PCD8544 (Nokia 5110) LCD, persists settings in EEPROM and history/logs in LittleFS, and serves a small HTTP API.
 - `boiler_relay_mqtt/boiler_relay_mqtt.ino`: the **dumb, fail-safe actuator**. Drives the relay on GPIO 23 based solely on the `boiler` field of the temp ESP's messages.
-- `index.html`: the browser dashboard (English UI), using mqtt.js over WSS (port 8884). It is a copy of `index.html` from https://github.com/dogukaninci/kombi-control, which is deployed with GitHub Pages; edits made here have to be pushed there to go live (git isn't installed on this PC). The user only sets a target temperature there (no offsets, min times or schedule — those were removed on purpose), and can reset the TPI learning. It fetches `http://<ip>/history` and `/logs` from the temp ESP using the `ip` field in `/temp`. Those plain-http fetches are likely blocked as mixed content when the page is served from https GitHub Pages.
+- `index.html`: the browser dashboard (English UI), using mqtt.js over WSS (port 8884). It's served by GitHub Pages from this repo, so a change goes live only after it's pushed. The user only sets a target temperature there (no offsets, min times or schedule — those were removed on purpose), and can reset the TPI learning. Chrome blocks any http request or download from the https Pages site to the ESP (mixed content). So `/history` and `/logs` are fetched only when the page is opened over http, and "Download report" opens the ESP's own page `http://<ip>/` (`httpRootHandler`), where the `/export` download link works.
 ## Building / flashing
 
 Arduino IDE or `arduino-cli` with the ESP32 Arduino core **3.x** (the sketches use the `esp_task_wdt_config_t` struct API, which doesn't exist in core 2.x). Required libraries: DHT sensor library (Adafruit), PubSubClient, ArduinoJson (7.4.3 is installed; the code uses the deprecated `StaticJsonDocument<N>` name, whose `N` v7 ignores, but the sizes are also large enough for v6), Adafruit GFX, Adafruit PCD8544.
