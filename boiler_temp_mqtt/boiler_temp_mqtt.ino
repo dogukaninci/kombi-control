@@ -979,8 +979,18 @@ void tpiStartCycle(unsigned long now) {
   if (duty <= 0.0f) dutyCarry = 0.0f;
   float want = constrain(duty + dutyCarry, 0.0f, 1.0f);
   unsigned long onMs = (unsigned long)(want * TPI_CYCLE_MS);
-  if (onMs < TPI_MIN_ON_MS)                    onMs = 0;             // too short → owe it
-  else if (TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS) onMs = TPI_CYCLE_MS; // gap too short → full
+  if (onMs < TPI_MIN_ON_MS) onMs = 0;                                 // too short → owe it
+  else if (TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS) {                    // OFF gap too short:
+    // If this cycle's own demand is low and the excess is only carried-over
+    // debt, round DOWN to 7 min and keep owing the rest. Rounding it up to a
+    // full 10-min burn overheated the room ~15 min later (radiator lag,
+    // 7 Nov 19:31: 22.0 → 22.2 °C). Real high demand (≥ 50 %) or a request
+    // that is nearly full still runs the whole cycle, so weak boilers keep
+    // their long runs. Simulation: typical house 7.6 → 6.6 min pulses,
+    // 0 min/day above target+0.2, ~12 % more starts.
+    bool nearlyFull = onMs * 2 >= 2 * TPI_CYCLE_MS - TPI_MIN_OFF_MS;  // ≥ 8.5 min
+    onMs = (duty >= 0.5f || nearlyFull) ? TPI_CYCLE_MS : TPI_CYCLE_MS - TPI_MIN_OFF_MS;
+  }
   // The user just raised the target and the room is clearly below it: don't
   // make them wait a whole cycle for a demand below the 5-min minimum — fire
   // the minimum pulse now; the overpaid duty is taken back via the carry.
