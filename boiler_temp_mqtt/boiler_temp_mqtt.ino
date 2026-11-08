@@ -87,8 +87,6 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_GAIN_SLOPE        0.3f   // °C/h rise with the boiler off = sun/cooking, not heat loss
 #define TPI_RAD_TAU_MIN       12.0f  // radiator lag: the learner's estimate of radiator heat
                                      // follows the boiler with this time constant (see simulation)
-#define TPI_RAD_COLD          0.1f   // radiator estimate below this counts as "boiler off"
-
 // ================= SYSTEM CONSTANTS =================
 // Door / window detection. The DHT22 reacts slowly, so look for a sustained
 // fall (regression slope) or a total drop below the recent peak.
@@ -950,10 +948,12 @@ void tpiEndCycle() {
         // this cycle, not the boiler's ON time. The old 0.6/0.4 duty weighting
         // was too short for this flat's radiators and dragged H and L down.
         float uEff = radN ? (float)(radSum / radN) : 0.6f * actualDuty + 0.4f * prevActualDuty;
-        if (uEff < TPI_RAD_COLD && slope > TPI_GAIN_SLOPE + heatRate * uEff) {
-          // Warming with cold radiators, more than their leftover heat explains,
-          // can only be free heat (sun, cooking, people). Learning from it drove
-          // L to 0 on 7 Nov and the boiler then reacted far too late — skip it.
+        if (actualDuty <= 0.0f && slope > TPI_GAIN_SLOPE + heatRate * uEff) {
+          // The boiler didn't run this cycle, yet the room warmed more than the
+          // radiators' leftover heat explains: free heat (sun, cooking, people).
+          // Learning from it drove L to 0 on 7 Nov, and on 8 Nov morning sun
+          // right after a burn (radiator estimate still 0.15-0.36) dragged H
+          // from 2.0 to 0.47 — so skip these cycles.
           Serial.printf("[TPI] +%.2f°C/h with boiler off — free heat, not learned\n", slope);
           flags |= CF_GAIN;
         } else {
