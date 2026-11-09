@@ -62,7 +62,8 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_MIN_ON_MS      300000UL  // ON pulse shorter than this → carried over
 #define TPI_MIN_OFF_MS     180000UL  // OFF gap shorter than this → stays ON
 #define TPI_HORIZON_H         1.5f   // aim to close the error in ~1.5 h
-#define TPI_TI_H              4.0f   // integral time constant
+#define TPI_TI_H              2.0f   // integral time constant (4 h left the room ~0.1 °C off
+                                     // for hours; 1 h oscillated with slow radiators — simulation)
 #define TPI_I_MAX             0.25f  // integral clamp (± duty)
 #define TPI_OVERSHOOT         0.4f   // T >= target + this → boiler off now
 #define TPI_FULL_ON_ERR       2.0f   // T <= target − this → 100 % duty
