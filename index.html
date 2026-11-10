@@ -445,44 +445,81 @@ window.addEventListener('beforeunload', () => {
 });
 
 // ════════════════════════════════════════════
-// ESP HISTORY FETCH (HTTP)
+// ESP HISTORY + LOG OVER MQTT
+// The https page can't fetch http from the ESP (mixed content), so it asks
+// over MQTT: {"id"} on <dev>/history/get and <dev>/log/get; the ESP answers in
+// chunks on …/data: {"id","seq","d":[…],"end":bool}.
 // ════════════════════════════════════════════
 let espIP = null;
+const dumps = {};   // kind → {id, chunks:{seq:d}, timer}
 
-function fetchHistory(ip) {
-  if (!ip) return;
+function requestEspData() {
+  ['history','log'].forEach(kind => {
+    const id = Math.random().toString(36).slice(2,10);
+    if (dumps[kind] && dumps[kind].timer) clearTimeout(dumps[kind].timer);
+    dumps[kind] = {id, chunks:{}, timer: setTimeout(() => finishDump(kind, false), 30000)};
+    client.publish(deviceId+'/'+kind+'/get', JSON.stringify({id}));
+  });
   const fd = document.getElementById('fetchStatus');
   if (fd) fd.textContent = '⬇ Loading ESP history...';
-  fetch('http://'+ip+'/history', {signal: AbortSignal.timeout(8000)})
-    .then(r => { if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-    .then(items => {
-      mergeHistory(items);
-      if (fd) fd.textContent = '✓ ESP history loaded ('+items.length+' points)';
-    })
-    .catch(e => {
-      log('ESP history fetch failed: '+e.message,'wa');
-      if (fd) fd.textContent = '⚠ ESP history unavailable';
-    });
 }
 
-function fetchLogs(ip) {
-  if (!ip) return;
-  fetch('http://'+ip+'/logs', {signal: AbortSignal.timeout(8000)})
-    .then(r => { if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-    .then(entries => {
+function onDumpChunk(kind, d) {
+  const st = dumps[kind];
+  if (!st || d.id !== st.id || !Array.isArray(d.d)) return;
+  st.chunks[d.seq] = d.d;
+  if (d.end) { st.lastSeq = d.seq; finishDump(kind, true); }
+}
+
+function finishDump(kind, complete) {
+  const st = dumps[kind];
+  if (!st || st.done) return;
+  st.done = true; clearTimeout(st.timer);
+  const seqs = Object.keys(st.chunks).map(Number).sort((a,b)=>a-b);
+  const missing = complete ? st.lastSeq + 1 - seqs.length : 0;
+  const fd = document.getElementById('fetchStatus');
+  if (!seqs.length) {
+    if (kind === 'history' && fd) fd.textContent = '⚠ ESP history unavailable (update the ESP firmware?)';
+    log('ESP '+kind+': no answer over MQTT','wa');
+    return;
+  }
+  if (kind === 'history') {
+    const items = [];
+    seqs.forEach(s => {
+      const a = st.chunks[s]; let ts = 0;
+      for (let i = 0; i + 2 < a.length; i += 3) {
+        ts = (i === 0) ? a[i] : ts + a[i];      // first absolute, then deltas
+        items.push([ts, a[i+1] / 10, a[i+2]]);
+      }
+    });
+    mergeHistory(items);
+    if (fd) fd.textContent = '✓ ESP history loaded ('+items.length+' points'
+      +(missing > 0 ? ', '+missing+' chunks lost' : '')+')';
+  } else {
+    const entries = [];
+    seqs.forEach(s => st.chunks[s].forEach(e => entries.push({ts:e[0], lvl:e[1], msg:e[2]})));
+    renderEspLog(entries, missing);
+  }
+}
+
+function renderEspLog(entries, missing) {
       if (!entries.length) return;
       const area = document.getElementById('logArea');
-      // Insert ESP log entries below any live entries already present
-      // Build a divider
+      const old = document.getElementById('espLogBlock');
+      if (old) old.remove();
+      const block = document.createElement('div');
+      block.id = 'espLogBlock';
+      area.appendChild(block);
       const div = document.createElement('div');
       div.className = 'ls';
       div.style.color = 'var(--brd2)';
       div.style.borderTop = '1px solid var(--brd)';
       div.style.marginTop = '4px';
       div.style.paddingTop = '4px';
-      div.textContent = '── ESP persistent log (' + entries.length + ' entries) ──';
-      area.appendChild(div);
-      // Append entries oldest→newest (they're already oldest first from the file)
+      div.textContent = '── ESP persistent log (' + entries.length + ' entries'
+        + (missing > 0 ? ', some lost in transfer' : '') + ') ──';
+      block.appendChild(div);
+      // Entries oldest→newest (the file is oldest first)
       entries.forEach(e => {
         const el = document.createElement('div');
         // Determine CSS class from level
@@ -500,11 +537,9 @@ function fetchLogs(ip) {
             {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
         }
         el.textContent = '[' + timeStr + '] [' + (e.lvl||'?') + '] ' + (e.msg || '');
-        area.appendChild(el);
+        block.appendChild(el);
       });
       log('ESP log loaded: ' + entries.length + ' entries', 'ok');
-    })
-    .catch(e => log('ESP log fetch failed: ' + e.message, 'wa'));
 }
 
 function mergeHistory(items) {
@@ -979,12 +1014,18 @@ function mqttConnect() {
     client.subscribe(deviceId+'/temp');
     client.subscribe(deviceId+'/heartbeat');
     client.subscribe(deviceId+'/relay/status');
+    client.subscribe(deviceId+'/history/data');
+    client.subscribe(deviceId+'/log/data', () => requestEspData());
   });
 
   client.on('message',(topic,message)=>{
     const msg=message.toString();
     try {
       const d=JSON.parse(msg);
+
+      // ─── History / log chunks from the ESP ───
+      if (topic.endsWith('/history/data')) { onDumpChunk('history', d); return; }
+      if (topic.endsWith('/log/data'))     { onDumpChunk('log', d);     return; }
 
       // ─── Temperature ───
       if (topic.endsWith('/temp')) {
@@ -1041,10 +1082,6 @@ function mqttConnect() {
           document.getElementById('reportInfo').textContent=
             'Opens http://'+espIP+'/ — tap "Download report" there (every 10-min cycle, the last 24 h of temperatures and the event log). Your phone or PC must be on the home Wi-Fi.';
           log('ESP IP: '+espIP,'ok');
-          // An https page (GitHub Pages) can't fetch from the ESP's plain http —
-          // the browser blocks it as mixed content, so don't even try there.
-          if (location.protocol !== 'https:') { fetchHistory(espIP); fetchLogs(espIP); }
-          else log('History/log from the ESP are only loaded when this page is opened over http (local copy).','');
         }
 
         document.getElementById('lastUpdate').textContent=

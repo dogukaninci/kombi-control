@@ -124,6 +124,13 @@ is no worse in **every** scenario, never by guessing.
   + airing with a wall-heat rebound). Options `WEATHER=0`, `WBIAS`, `NEAR710`,
   `SUNSKIP`, `DOORSKIP`, `REBOUND`.
 
+- **Chart history and log over MQTT**: on the https dashboard the chart only
+  showed what that browser had seen (localStorage) and the ESP log never
+  loaded, because http fetches to the ESP are blocked as mixed content. The
+  dashboard now requests both over MQTT and the ESP streams them in chunks
+  (see the topic table in `CLAUDE.md`). Decoding was checked in the browser
+  with chunks in the firmware's format.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |

@@ -171,6 +171,16 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TOPIC_HEARTBEAT "silent-hearth-681/heartbeat"
 #define TOPIC_DOOR      "silent-hearth-681/door"
 #define TOPIC_SETTINGS  "silent-hearth-681/settings"
+// History / log over MQTT: the https dashboard can't fetch http from the ESP
+// (mixed content), so it publishes {"id":"…"} on …/get and the ESP answers
+// with chunks on …/data: {"id","seq","d":[…],"end":bool}.
+#define TOPIC_HIST_GET  "silent-hearth-681/history/get"
+#define TOPIC_HIST_DATA "silent-hearth-681/history/data"
+#define TOPIC_LOG_GET   "silent-hearth-681/log/get"
+#define TOPIC_LOG_DATA  "silent-hearth-681/log/data"
+#define DUMP_CHUNK_FILL      720    // start a new chunk once the payload reaches this
+#define DUMP_INTERVAL_MS     150    // between chunks (be gentle with the public broker)
+#define DUMP_MIN_GAP_MS     5000    // ignore a new request this soon after the last one
 
 // ================= HISTORY RECORD =================
 // 9 bytes/record → ~5.4 KB/day at 600 records/day
@@ -255,6 +265,17 @@ float         outdoorT       = NAN;
 unsigned long outdoorAtMs    = 0;
 unsigned long lastWeatherTry = 0;
 float         geoLat = NAN, geoLon = NAN;
+
+// ── History / log dump over MQTT (one chunk per DUMP_INTERVAL_MS) ──
+struct Dump {
+  bool          active = false;
+  char          id[17] = "";
+  uint32_t      pos    = 0;     // byte offset in the file
+  uint16_t      seq    = 0;
+  uint32_t      cutoff = 0;     // history: oldest timestamp to send
+  unsigned long lastMs = 0;     // last chunk sent / request accepted
+};
+Dump histDump, logDump;
 
 // ── TPI cycle state ───────────────────────────────────────
 bool          cycleActive    = false;
@@ -433,7 +454,7 @@ void logWrite(const char* level, const char* msg) {
   // Trim if file exceeds LOG_MAX_BYTES — discard oldest 25 %
   File fc = LittleFS.open(LOG_FILE, "r");
   if (!fc) return;
-  if (fc.size() <= LOG_MAX_BYTES) { fc.close(); return; }
+  if (fc.size() <= LOG_MAX_BYTES || logDump.active) { fc.close(); return; }   // trim later, not mid-dump
   std::vector<String> lines;
   lines.reserve(250);
   while (fc.available()) {
@@ -564,7 +585,7 @@ void historyWrite(float t, bool boiler, bool door, bool forced = false) {
   histLastMs     = now;
   histCount++;
 
-  if (histCount % HIST_COMPACT_EVERY == 0) historyCompact();
+  if (histCount % HIST_COMPACT_EVERY == 0 && !histDump.active) historyCompact();
 }
 
 // ============================================================
@@ -1386,6 +1407,110 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
     }
   }
+
+  if (tp == String(TOPIC_HIST_GET)) dumpRequest(histDump, msg, true);
+  if (tp == String(TOPIC_LOG_GET))  dumpRequest(logDump,  msg, false);
+}
+
+// ============================================================
+// HISTORY / LOG OVER MQTT
+// ============================================================
+// Request: {"id":"<1-16 letters/digits>"}. The broker is public, so requests
+// are rate-limited and one dump of each kind runs at a time.
+void dumpRequest(Dump& d, const String& msg, bool isHist) {
+  if (d.active || (d.lastMs && millis() - d.lastMs < DUMP_MIN_GAP_MS)) return;
+  StaticJsonDocument<128> req;
+  if (deserializeJson(req, msg)) return;
+  const char* id = req["id"] | "";
+  size_t n = strlen(id);
+  if (n == 0 || n >= sizeof(d.id)) return;
+  for (size_t i = 0; i < n; i++) if (!isalnum((unsigned char)id[i])) return;
+  strcpy(d.id, id);
+  d.pos = 0; d.seq = 0; d.active = true; d.lastMs = millis();
+  if (isHist) {
+    time_t now_t; time(&now_t);
+    d.cutoff = (uint32_t)(now_t > 86400 ? now_t - 86400 : 0);
+  }
+  Serial.printf("[DUMP] %s requested (id %s)\n", isHist ? "history" : "log", d.id);
+}
+
+// History chunk: "d":[ts0,t10,b, dts,t10,b, …] — the first timestamp of each
+// chunk is absolute (unix s), the rest are deltas; t10 = °C × 10, b = boiler.
+void histDumpStep() {
+  char buf[MQTT_BUFFER_SIZE - 80];
+  int n = snprintf(buf, sizeof(buf), "{\"id\":\"%s\",\"seq\":%u,\"d\":[", histDump.id, histDump.seq);
+  bool eof = true;
+  File f = LittleFS.open(HISTORY_FILE, "r");
+  if (f) {
+    f.seek(histDump.pos);
+    HistRecord r;
+    uint32_t prevTs = 0;
+    eof = false;
+    while (n < DUMP_CHUNK_FILL) {
+      if (f.readBytes((char*)&r, sizeof(r)) != sizeof(r)) { eof = true; break; }
+      histDump.pos += sizeof(r);
+      if (r.ts < histDump.cutoff) continue;
+      long t10 = lroundf(r.t * 10.0f);
+      n += snprintf(buf + n, sizeof(buf) - n, prevTs ? ",%lu,%ld,%u" : "%lu,%ld,%u",
+                    (unsigned long)(prevTs ? r.ts - prevTs : r.ts), t10, (unsigned)(r.flags & 0x01));
+      prevTs = r.ts;
+    }
+    if (!eof && f.position() >= f.size()) eof = true;
+    f.close();
+  }
+  snprintf(buf + n, sizeof(buf) - n, "],\"end\":%s}", eof ? "true" : "false");
+  mqttClient.publish(TOPIC_HIST_DATA, buf);
+  histDump.seq++;
+  if (eof) { histDump.active = false; Serial.printf("[DUMP] history sent (%u chunks)\n", histDump.seq); }
+}
+
+// Log chunk: "d":[[ts,"LEVEL","message"], …] from /log.txt, oldest first
+void logDumpStep() {
+  char buf[MQTT_BUFFER_SIZE - 80];
+  int n = snprintf(buf, sizeof(buf), "{\"id\":\"%s\",\"seq\":%u,\"d\":[", logDump.id, logDump.seq);
+  bool eof = true, first = true;
+  File f = LittleFS.open(LOG_FILE, "r");
+  if (f) {
+    f.seek(logDump.pos);
+    eof = false;
+    while (n < DUMP_CHUNK_FILL) {
+      if (!f.available()) { eof = true; break; }
+      String l = f.readStringUntil('\n');
+      l.trim();
+      int p1 = l.indexOf('|'), p2 = p1 < 0 ? -1 : l.indexOf('|', p1 + 1);
+      if (p1 < 0 || p2 < 0) { logDump.pos = f.position(); continue; }
+      unsigned long ts = strtoul(l.substring(0, p1).c_str(), nullptr, 10);
+      char lvl[8]; size_t li = 0;
+      for (int k = p1 + 1; k < p2 && li < sizeof(lvl) - 1; k++)
+        if (isalpha((unsigned char)l[k])) lvl[li++] = l[k];
+      lvl[li] = '\0';
+      char msg[400]; size_t mi = 0;   // JSON-escaped, control chars dropped
+      for (int k = p2 + 1; k < (int)l.length() && mi < sizeof(msg) - 3; k++) {
+        char c = l[k];
+        if (c == '"' || c == '\\') { msg[mi++] = '\\'; msg[mi++] = c; }
+        else if ((uint8_t)c >= 0x20) msg[mi++] = c;
+      }
+      msg[mi] = '\0';
+      int need = (int)mi + 32;
+      if (!first && n + need >= (int)sizeof(buf) - 24) break;   // next chunk; pos not advanced
+      n += snprintf(buf + n, sizeof(buf) - n, "%s[%lu,\"%s\",\"%s\"]", first ? "" : ",", ts, lvl, msg);
+      first = false;
+      logDump.pos = f.position();
+    }
+    if (!eof && logDump.pos >= f.size()) eof = true;
+    f.close();
+  }
+  snprintf(buf + n, sizeof(buf) - n, "],\"end\":%s}", eof ? "true" : "false");
+  mqttClient.publish(TOPIC_LOG_DATA, buf);
+  logDump.seq++;
+  if (eof) { logDump.active = false; Serial.printf("[DUMP] log sent (%u chunks)\n", logDump.seq); }
+}
+
+void dumpStep() {
+  if (!mqttClient.connected()) { histDump.active = logDump.active = false; return; }
+  unsigned long now = millis();
+  if (histDump.active && now - histDump.lastMs >= DUMP_INTERVAL_MS) { histDump.lastMs = now; histDumpStep(); }
+  else if (logDump.active && now - logDump.lastMs >= DUMP_INTERVAL_MS) { logDump.lastMs = now; logDumpStep(); }
 }
 
 // ============================================================
@@ -1406,6 +1531,8 @@ void mqttConnect() {
     mqttOk = true;
     mqttClient.subscribe(TOPIC_CMD);
     mqttClient.subscribe(TOPIC_SETTINGS);
+    mqttClient.subscribe(TOPIC_HIST_GET);
+    mqttClient.subscribe(TOPIC_LOG_GET);
     Serial.println("[MQTT] Connected");
   } else {
     Serial.println("[MQTT] Error: " + String(mqttClient.state()));
@@ -1586,6 +1713,7 @@ void loop() {
   if (now - lastHeartbeat > HEARTBEAT_INTERVAL) { lastHeartbeat = now; sendHeartbeat();  }
   if (now - lastLcd       > LCD_INTERVAL)       { lastLcd       = now; lcdUpdate();      }
   weatherUpdate();   // rate-limited inside (15 min, 2 min after a failure)
+  dumpStep();        // history/log over MQTT, one chunk at a time
 
   delay(50);
 }
