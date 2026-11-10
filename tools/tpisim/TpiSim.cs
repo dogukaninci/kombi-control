@@ -56,6 +56,8 @@ class Tpi {
     public static bool WEATHER = true, SUNSKIP = false, NEAR710 = false, NEAR710A = true;   // firmware: weather model on, 7-min round-down above target
     public static int DOORSKIP = 0;          // extra cycles not learned after a door/window closes
     public static float SUN_ABOVE = 1.0f;    // SUNSKIP: boiler off and room this far above target
+    public static double STRETCH_MAX_MIN = 0;   // >0: high demand lengthens the cycle up to this (min) instead of rounding
+    public static float STRETCH_FROM = 0.7f;  public int stretched = 0;
     public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
     public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
     const float K_MIN = 0.005f, K_MAX = 0.4f;
@@ -200,8 +202,15 @@ class Tpi {
             onMs = (ulong)(want * TPI_CYCLE_MS);
             if (onMs < TPI_MIN_ON_MS) onMs = (ROUND_NEAREST && onMs * 2 >= TPI_MIN_ON_MS) ? TPI_MIN_ON_MS : 0;
             if (LAG_KICK && onMs == 0 && err >= LAG_KICK_ERR && duty > 0) { onMs = TPI_MIN_ON_MS; lagKicks++; }
+            else if (STRETCH_MAX_MIN > 0 && TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS && want >= STRETCH_FROM && want < 0.999f) {
+                // High demand: keep the 3-min OFF and lengthen the cycle so ON/(ON+OFF) = want
+                double periodMin = Math.Min(STRETCH_MAX_MIN, (TPI_MIN_OFF_MS / 60000.0) / (1.0 - want));
+                cyclePeriodMs = (ulong)(periodMin * 60000);
+                onMs = cyclePeriodMs - TPI_MIN_OFF_MS;
+                stretched++;
+            }
             else if (TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS) onMs = (!CAP7 || (!(NEAR710 || (NEAR710A && err < 0)) && duty >= 0.5f) || onMs * 2 >= 2 * TPI_CYCLE_MS - TPI_MIN_OFF_MS) ? TPI_CYCLE_MS : TPI_CYCLE_MS - TPI_MIN_OFF_MS;
-            dutyCarry = Clamp(duty + dutyCarry - (float)onMs / TPI_CYCLE_MS, -TPI_CARRY_MAX, TPI_CARRY_MAX);
+            dutyCarry = Clamp(duty + dutyCarry - (float)onMs / cyclePeriodMs, -TPI_CARRY_MAX, TPI_CARRY_MAX);
         }
         cycleActive = true;
         cycleLearnable = !skipLearnNext && skipCycles == 0;
@@ -381,6 +390,7 @@ class Program {
             tpi.heatRate, tpi.lossRate, tpi.lossRate / tpi.heatRate, room.a, room.b * (curTarget - tout(days * 24)), room.b * (curTarget - tout(days * 24)) / room.a, tpi.integ);
         Console.WriteLine("  gain-skipped learning cycles: {0} (sun-above-target {2}), door-skipped {3}, undershoot kicks: {1}", tpi.gainSkips, tpi.lagKicks, tpi.sunSkips, tpi.doorSkips);
         if (Tpi.WEATHER) Console.WriteLine("  weather model: kLoss {0:F4} (true b {1:F4})", tpi.kLoss, room.b);
+        if (Tpi.STRETCH_MAX_MIN > 0) Console.WriteLine("  stretched cycles: {0}", tpi.stretched);
         Console.WriteLine("  total starts: {0} ({1:F1}/h), learned cycles: {2}, rejected slopes: {3}, overshoot cuts: {4}",
             starts, starts / (days * 24), tpi.learnN, tpi.rejected, tpi.cutCount);
         foreach (var kv in eveMin) Console.WriteLine("  day {0} 16-19h: min {1:F2} °C, {2:F0} min more than 0.3 below target", kv.Key, kv.Value, eveLow.ContainsKey(kv.Key) ? eveLow[kv.Key] : 0);
@@ -421,6 +431,8 @@ class Program {
         REBOUND = Environment.GetEnvironmentVariable("REBOUND") == "1";
         ev = Environment.GetEnvironmentVariable("DOORSKIP"); if (!string.IsNullOrEmpty(ev)) Tpi.DOORSKIP = int.Parse(ev);
         ev = Environment.GetEnvironmentVariable("WBIAS"); if (!string.IsNullOrEmpty(ev)) WBIAS = double.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("STRETCH"); if (!string.IsNullOrEmpty(ev)) Tpi.STRETCH_MAX_MIN = double.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("STRETCHFROM"); if (!string.IsNullOrEmpty(ev)) Tpi.STRETCH_FROM = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("SUNABOVE"); if (!string.IsNullOrEmpty(ev)) Tpi.SUN_ABOVE = float.Parse(ev, inv);
         Console.WriteLine("##### WEATHER " + Tpi.WEATHER + " bias " + WBIAS + ", SUNSKIP " + Tpi.SUNSKIP + ", NEAR710 " + Tpi.NEAR710 + ", DOORSKIP " + Tpi.DOORSKIP + ", REBOUND " + REBOUND + " #####");
         if (args.Length > 1 && args[1] == "extra") {
