@@ -94,6 +94,36 @@ is no worse in **every** scenario, never by guessing.
   above), so it was rejected. Real-world effect not yet confirmed: the next two
   reports had an unreachable target and then manual mode.
 
+### 10 Nov – sensor location, weather model, capacity limit
+- Night of 9–10 Nov, 04:10–07:10: the reading swung ~1 °C in 10 min down
+  and up again; two of these were flagged as an open window although everyone
+  was asleep. Cause: **the sensor sat on the window sill next to a radiator**
+  (cold glass downdraft / radiator plume). Advice given: move it to an inner
+  wall at ~1.5 m, away from window, radiator, door and direct sun, then
+  "Reset learning". This probably also inflated the sun peaks (25–26 °C) and
+  the slow-slope "door" alarms on sunny days. Relay feedback isn't available in
+  reports (the relay status only goes to the dashboard), but a lost relay can't
+  explain drops 3× faster than the house's normal cooling.
+- 10 Nov afternoon: boiler 100 % for 7 h, room 22.6 vs 22.5 target, learned
+  L ≈ H ≈ 2.2 °C/h → at capacity. With a 3-min minimum OFF, the next option
+  below 100 % is 7/10 min = 70 %. Fix: when the room is **above** target, an
+  OFF gap under 3 min may round down to 7 min even at high demand (alternating
+  7/10 averages the real demand). Simulator: small gain near capacity, no
+  extra starts. (Rounding down at high demand regardless of the error raised
+  starts in C from 3.0 to 5.4/h, so it's limited to "above target".)
+- **Weather model** (`tpiLearnW`, see `CLAUDE.md`): outdoor temperature from
+  Open-Meteo every 15 min; heat loss `kLoss·(T − Tout)`. Simulator, current
+  firmware vs weather model (sensor reads exactly target / ≥ 0.2 °C off):
+  A 49 → 54 % / 4 → 2 %, G 43 → 54 % / 7 → 3 %, K (near capacity) 38 → 45 % /
+  21 → 11 %, W (cold front) 48 → 51 % / 9 → 5 %. With the weather service
+  2 °C off either way it stays better. Sunny scenarios got slightly worse on
+  above-target time (F 400 → 447, S 449 → 495 min/day; mostly sun the boiler
+  can't remove).
+- New simulator scenarios: `TpiSim.exe skip extra kick down` runs **K** (near
+  capacity), **W** (cold front 12 → 0 °C in 3 h) and **S** (strong morning sun
+  + airing with a wall-heat rebound). Options `WEATHER=0`, `WBIAS`, `NEAR710`,
+  `SUNSKIP`, `DOORSKIP`, `REBOUND`.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |
@@ -105,6 +135,9 @@ is no worse in **every** scenario, never by guessing.
 | Learn faster far from target, slower near it (0.5×/2×) | G: 0 → 94 min/day above target; A RMS 0.081 → 0.109 |
 | Learn faster only far from target (1×/3×) | Sun/airing pumped H to 4.9 (true 3.1); evening undershoot with slow radiators |
 | Skip overshoot-cut cycles / clip RLS errors | No consistent benefit |
+| Don't learn heat loss when the boiler is off and the room is ≥ 1 °C above target (sun holding the room flat) | Alone: small gain in S; with the weather model: S 495 → 520, D 437 → 526 min/day above target |
+| Skip 2 more learning cycles after a door/window closes (wall-heat rebound) | S 449 → 495, E 428 → 459 min/day above target |
+| Round down to 7 min at any high demand (not only above target) | C (weak boiler) starts 3.0 → 5.4/h |
 
 ## Facts learned about this flat
 
@@ -114,7 +147,8 @@ is no worse in **every** scenario, never by guessing.
   is at its capacity limit on cold nights.** Raising the boiler's own radiator
   water temperature would increase H; the learner adapts on its own.
 - Strong **morning/afternoon sun**: the room reaches 25–26 °C with the boiler
-  off.
+  off (partly because the sensor sat on the window sill until at least 10 Nov).
+- Boiler radiator water temperature set to **55 °C** (10 Nov).
 - Radiators lag noticeably: room peaks ~15 min after a burn ends.
 - Door alarms: several per sunny day were triggered by the "0.6 °C below the
   5-min peak" rule with a slow slope (−0.1 °C/min). Unconfirmed whether these
@@ -123,13 +157,20 @@ is no worse in **every** scenario, never by guessing.
 
 ## Open items
 
-- **Sun holding the room flat above target** (9 Nov, 25–26 °C): those cycles
-  aren't warming, so the free-heat rule misses them, and L was taught 1.29 →
-  0.52. Planned fix: don't learn loss when the boiler is off and the room is
-  ≥ ~1 °C above target. Test in the simulator first (F, and G/H with `SUNAM=3`).
-- Confirm the 2-h integral in a report from an evening in auto mode with a
-  reachable target.
-- Possibly: make the door rule ignore drops right after sun-driven rises.
+- **Sensor relocation** (10 Nov advice): check whether it was moved before
+  reading a report; data from the window sill overstates sun/radiator effects.
+- First report with the weather model: is `tout_c` filled in, did `kLoss`
+  settle (≈ L / (22 − Tout), roughly 0.08–0.15 here), any "Outdoor temperature
+  unavailable" warnings?
+- Sun holding the room flat above target (9 Nov) taught L 1.29 → 0.52. The
+  planned "skip when ≥ 1 °C above target" was worse in the simulator (see
+  rejected ideas); re-check after the sensor has moved. A solar-radiation term
+  from Open-Meteo (`shortwave_radiation`) is a possible next step.
+- The 2-h integral looked right on 10 Nov 00:00–04:00 (22.51–22.53 against
+  22.5).
+- Possibly: relay feedback in the report (temp ESP subscribing to
+  `/relay/status`, logging drops and mismatches).
+- Boiler water temperature: 55 °C on 10 Nov; at capacity on cold nights.
 
 ## Practical gotchas
 

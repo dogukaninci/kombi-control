@@ -253,6 +253,7 @@ body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);
     <div class="row"><div class="rl">Heat rate</div><div class="rv c-ora" id="heatRate">—</div><div class="re">°C/h at 100 %</div></div>
     <div class="row"><div class="rl">Heat loss</div><div class="rv c-blu" id="lossRate">—</div><div class="re">°C/h at 0 %</div></div>
     <div class="row"><div class="rl">Base duty</div><div class="rv" id="baseDuty">—</div><div class="re">to hold temp</div></div>
+    <div class="row"><div class="rl">Outdoor</div><div class="rv c-blu" id="toutVal">—</div><div class="re">from the weather service</div></div>
     <div class="row"><div class="rl">Radiator</div><div class="rv c-ora" id="radHeat">—</div><div class="re">estimated warmth</div></div>
     <div class="row"><div class="rl">Learned</div><div class="rv" id="learnN">—</div><div class="re">cycles (10 min)</div></div>
   </div>
@@ -919,6 +920,8 @@ function updateTpiUI(d) {
   if (d.loss_rate!==undefined) document.getElementById('lossRate').textContent=d.loss_rate.toFixed(2);
   if (d.heat_rate&&d.loss_rate!==undefined)
     document.getElementById('baseDuty').textContent=Math.round(Math.min(1,d.loss_rate/d.heat_rate)*100)+' %';
+  if (d.tout!==undefined) document.getElementById('toutVal').textContent=
+    (d.tout===null ? 'unavailable' : d.tout.toFixed(1)+' °C');
   if (d.rad!==undefined) document.getElementById('radHeat').textContent='≈ '+Math.round(d.rad*100)+' %';
   if (d.learn_n!==undefined) {
     document.getElementById('learnN').textContent=d.learn_n;
@@ -928,7 +931,9 @@ function updateTpiUI(d) {
                :'Learned — keeps adapting to the weather and the house.';
     document.getElementById('learnInfo').textContent=
       stage+' Heats '+d.heat_rate.toFixed(2)+' °C/h at full power, loses '
-      +d.loss_rate.toFixed(2)+' °C/h when off ('+n+' cycles).';
+      +d.loss_rate.toFixed(2)+' °C/h when off'
+      +(d.tout!==undefined&&d.tout!==null ? ' at '+d.tout.toFixed(1)+' °C outside' : '')
+      +' ('+n+' cycles).';
   }
 }
 

@@ -49,9 +49,21 @@ class Tpi {
     public float cycleDuty = 0, prevActualDuty = 0;
     double sX, sY, sXX, sXY; int sN;
     public ulong millis;
-    public int rejected = 0, cutCount = 0, gainSkips = 0, lagKicks = 0;
+    public int rejected = 0, cutCount = 0, gainSkips = 0, lagKicks = 0, sunSkips = 0, doorSkips = 0;
     public static int GAINRULE = 1; public static bool SKIPCUT = false; public static float ECLIP = 0; bool cycleCut = false;
     public static float WLO = 1, WHI = 1; float startErr = 0; float curW = 1;
+    // Outdoor-temperature model: loss = kLoss·(T − tout) instead of a flat L.
+    public static bool WEATHER = true, SUNSKIP = false, NEAR710 = false, NEAR710A = true;   // firmware: weather model on, 7-min round-down above target
+    public static int DOORSKIP = 0;          // extra cycles not learned after a door/window closes
+    public static float SUN_ABOVE = 1.0f;    // SUNSKIP: boiler off and room this far above target
+    public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
+    public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
+    const float K_MIN = 0.005f, K_MAX = 0.4f;
+    float[,] rlsPw = { { 4.0f, 0 }, { 0, 0.01f } };
+    int skipCycles = 0;
+    bool UseW { get { return WEATHER && !float.IsNaN(tout); } }
+    float LossAt(float T) { return UseW ? kLoss * Math.Max(1f, T - tout) : lossRate; }
+    public void tpiAbortDoor() { tpiAbort(); skipCycles = DOORSKIP; }
 
     static float Clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -62,12 +74,39 @@ class Tpi {
         if (err >= TPI_FULL_ON_ERR) return 1.0f;
         if (err <= -TPI_OVERSHOOT)  return 0.0f;
         if (LAGPRED && LAG_TAU_MIN > 0) err -= (float)(PRED_GAIN * heatRate * rHat * LAG_TAU_MIN / 60.0);
-        float b = lossRate / heatRate;
+        float b = LossAt(target) / heatRate;
         float duty = b + tpiKp() * err + integ;
         return Clamp(duty, 0.0f, 1.0f);
     }
 
     public void tpiAbort() { LagUpdate(millis); lastOn = false; cycleActive = false; skipLearnNext = true; dutyCarry = 0; }
+
+    void tpiLearnLossOnlyW(float u, float slope, float d) {
+        float e = slope - (heatRate * u - kLoss * d);
+        kLoss = Clamp(kLoss - TPI_LOSS_GAIN * e / d, K_MIN, K_MAX);
+        lossRate = kLoss * d;
+        learnN++;
+    }
+
+    void tpiLearnW(float u, float slope, float d) {
+        float[] phi = { u, -d };
+        float[] Pphi = { rlsPw[0,0]*phi[0] + rlsPw[0,1]*phi[1], rlsPw[1,0]*phi[0] + rlsPw[1,1]*phi[1] };
+        float denom = RLS_LAMBDA + phi[0]*Pphi[0] + phi[1]*Pphi[1];
+        float[] k = { Pphi[0]/denom, Pphi[1]/denom };
+        float e = slope - (heatRate * u - kLoss * d);
+        heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX);
+        kLoss = Clamp(kLoss + k[1]*e, K_MIN, K_MAX);
+        float[,] newP = new float[2,2];
+        for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++)
+            newP[i,j] = (rlsPw[i,j] - k[i]*Pphi[j]) / RLS_LAMBDA;
+        float off = 0.5f * (newP[0,1] + newP[1,0]);
+        newP[0,1] = newP[1,0] = off;
+        float tr = newP[0,0] + newP[1,1];
+        if (tr > 10.0f) { float s = 10.0f/tr; for (int i=0;i<2;i++) for (int j=0;j<2;j++) newP[i,j] *= s; }
+        rlsPw = newP;
+        lossRate = kLoss * d;
+        learnN++;
+    }
 
     void tpiLearnLossOnly(float u, float slope) {
         float e = slope - (heatRate * u - lossRate); if (ECLIP > 0) e = Clamp(e, -ECLIP, ECLIP);
@@ -109,8 +148,11 @@ class Tpi {
                     else {
                         bool excited = (uAvg < 0) || Math.Abs(uEff - uAvg) >= TPI_EXCITE;
                         uAvg = (uAvg < 0) ? uEff : 0.8f * uAvg + 0.2f * uEff;
+                        float tMean = (float)(sY / sN);
                         if (SKIPCUT && cycleCut) { gainSkips++; }
                         else if (GAINFIX && slope > 0.3f + heatRate * uEff && (GAINRULE == 1 ? actualDuty <= 0.0f : (LAG_TAU_MIN > 0 ? uEff < 0.1f : uEff <= 0.0f))) { gainSkips++; }
+                        else if (SUNSKIP && actualDuty <= 0.0f && tMean >= target + SUN_ABOVE) { gainSkips++; sunSkips++; }
+                        else if (UseW) { float d = Math.Max(1f, tMean - tout); if (excited) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
                         else if (excited) tpiLearn(uEff, slope); else tpiLearnLossOnly(uEff, slope);
                     }
                 } else rejected++;
@@ -158,11 +200,12 @@ class Tpi {
             onMs = (ulong)(want * TPI_CYCLE_MS);
             if (onMs < TPI_MIN_ON_MS) onMs = (ROUND_NEAREST && onMs * 2 >= TPI_MIN_ON_MS) ? TPI_MIN_ON_MS : 0;
             if (LAG_KICK && onMs == 0 && err >= LAG_KICK_ERR && duty > 0) { onMs = TPI_MIN_ON_MS; lagKicks++; }
-            else if (TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS) onMs = (!CAP7 || duty >= 0.5f || onMs * 2 >= 2 * TPI_CYCLE_MS - TPI_MIN_OFF_MS) ? TPI_CYCLE_MS : TPI_CYCLE_MS - TPI_MIN_OFF_MS;
+            else if (TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS) onMs = (!CAP7 || (!(NEAR710 || (NEAR710A && err < 0)) && duty >= 0.5f) || onMs * 2 >= 2 * TPI_CYCLE_MS - TPI_MIN_OFF_MS) ? TPI_CYCLE_MS : TPI_CYCLE_MS - TPI_MIN_OFF_MS;
             dutyCarry = Clamp(duty + dutyCarry - (float)onMs / TPI_CYCLE_MS, -TPI_CARRY_MAX, TPI_CARRY_MAX);
         }
         cycleActive = true;
-        cycleLearnable = !skipLearnNext;
+        cycleLearnable = !skipLearnNext && skipCycles == 0;
+        if (!skipLearnNext && skipCycles > 0) { skipCycles--; doorSkips++; }
         skipLearnNext = false;
         cycleStartMs = now; cycleOnMs = onMs; cycleDuty = duty; cycleCut = false;
         sX = sY = sXX = sXY = 0; sN = 0; rSum = 0; rN = 0;
@@ -240,6 +283,8 @@ class Room {
 class Program {
     static Random rng = new Random(42);
     static Func<double,double> SolarProfile = h => 0;
+    static double WBIAS = 0;      // weather API reads this much off the real outdoor temperature
+    static bool REBOUND = false;  // airing followed by a wall-heat rebound
     static double Gauss() { double u1 = 1.0 - rng.NextDouble(), u2 = rng.NextDouble(); return Math.Sqrt(-2*Math.Log(u1))*Math.Cos(2*Math.PI*u2); }
 
     class Seg { public double fromH, toH; public float target; }
@@ -248,7 +293,10 @@ class Program {
         var l = new List<Win>();
         for (int d = 0; d < days; d++) {
             l.Add(new Win { atH = d * 24 + 15.5, minutes = 22, lossPerH = 6, label = "Day " + d + " airing" });
-            l.Add(new Win { atH = d * 24 + 15.5 + 22 / 60.0, minutes = 40, lossPerH = 1.5, label = "Day " + d + " after-airing" });
+            if (REBOUND) // walls give their heat back once the window closes (seen 10 Nov: +5 °C/h)
+                l.Add(new Win { atH = d * 24 + 15.5 + 22 / 60.0, minutes = 20, lossPerH = -4, label = "Day " + d + " rebound" });
+            else
+                l.Add(new Win { atH = d * 24 + 15.5 + 22 / 60.0, minutes = 40, lossPerH = 1.5, label = "Day " + d + " after-airing" });
         }
         return l.ToArray();
     }
@@ -306,7 +354,9 @@ class Program {
                 }
                 prevDoor = door.open;
             }
-            if (door.open) { tpi.tpiAbort(); boiler = false; }
+            // Weather API: outdoor temperature every 15 min, with a station bias
+            tpi.tout = (float)(tout(Math.Floor(hours * 4) / 4) + WBIAS);
+            if (door.open) { tpi.tpiAbortDoor(); boiler = false; }
             else boiler = tpi.tpiControl();
             if (boiler && !prevBoiler) { starts++; bStarts++; }
             if (boiler) onMinTotal += dtS / 60.0;
@@ -329,7 +379,8 @@ class Program {
         Console.WriteLine("  avg ON pulse {0:F1} min, after 12 h: RMS {1:F3} °C, {2:F0} min/day above target+0.2", starts > 0 ? onMinTotal / starts : 0, Math.Sqrt(settledSq / Math.Max(1, settledN)), aboveMin / Math.Max(0.01, (days * 24 - 12) / 24));
         Console.WriteLine("  final learned H {0:F2} L {1:F2} (L/H {2:F2}; true H {3:F2}, L at target {4:F2}, L/H {5:F2}), I {6:F3}",
             tpi.heatRate, tpi.lossRate, tpi.lossRate / tpi.heatRate, room.a, room.b * (curTarget - tout(days * 24)), room.b * (curTarget - tout(days * 24)) / room.a, tpi.integ);
-        Console.WriteLine("  gain-skipped learning cycles: {0}, undershoot kicks: {1}", tpi.gainSkips, tpi.lagKicks);
+        Console.WriteLine("  gain-skipped learning cycles: {0} (sun-above-target {2}), door-skipped {3}, undershoot kicks: {1}", tpi.gainSkips, tpi.lagKicks, tpi.sunSkips, tpi.doorSkips);
+        if (Tpi.WEATHER) Console.WriteLine("  weather model: kLoss {0:F4} (true b {1:F4})", tpi.kLoss, room.b);
         Console.WriteLine("  total starts: {0} ({1:F1}/h), learned cycles: {2}, rejected slopes: {3}, overshoot cuts: {4}",
             starts, starts / (days * 24), tpi.learnN, tpi.rejected, tpi.cutCount);
         foreach (var kv in eveMin) Console.WriteLine("  day {0} 16-19h: min {1:F2} °C, {2:F0} min more than 0.3 below target", kv.Key, kv.Value, eveLow.ContainsKey(kv.Key) ? eveLow[kv.Key] : 0);
@@ -364,6 +415,33 @@ class Program {
         Tpi.SKIPCUT = Environment.GetEnvironmentVariable("SKIPCUT") == "1";
         ev = Environment.GetEnvironmentVariable("ECLIP"); if (!string.IsNullOrEmpty(ev)) Tpi.ECLIP = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("SUNAM"); if (!string.IsNullOrEmpty(ev)) { double am = double.Parse(ev, inv); SolarProfile = h => { double d = h % 24; return (d >= 8 && d <= 12) ? am * Math.Sin(Math.PI * (d - 8) / 4) : 0; }; }
+        Tpi.WEATHER = Environment.GetEnvironmentVariable("WEATHER") != "0";
+        Tpi.SUNSKIP = Environment.GetEnvironmentVariable("SUNSKIP") == "1";
+        Tpi.NEAR710 = Environment.GetEnvironmentVariable("NEAR710") == "1"; Tpi.NEAR710A = Environment.GetEnvironmentVariable("NEAR710") != "0";
+        REBOUND = Environment.GetEnvironmentVariable("REBOUND") == "1";
+        ev = Environment.GetEnvironmentVariable("DOORSKIP"); if (!string.IsNullOrEmpty(ev)) Tpi.DOORSKIP = int.Parse(ev);
+        ev = Environment.GetEnvironmentVariable("WBIAS"); if (!string.IsNullOrEmpty(ev)) WBIAS = double.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("SUNABOVE"); if (!string.IsNullOrEmpty(ev)) Tpi.SUN_ABOVE = float.Parse(ev, inv);
+        Console.WriteLine("##### WEATHER " + Tpi.WEATHER + " bias " + WBIAS + ", SUNSKIP " + Tpi.SUNSKIP + ", NEAR710 " + Tpi.NEAR710 + ", DOORSKIP " + Tpi.DOORSKIP + ", REBOUND " + REBOUND + " #####");
+        if (args.Length > 1 && args[1] == "extra") {
+            bool tbl = Environment.GetEnvironmentVariable("TABLE") == "1";
+            // K) Capacity-limited cold spell, like 10 Nov: needs ~93 % at 22.5 °C
+            var k = new Room(22, 2.2, 0.10, 15); k.tauWaterH = 8 / 60.0;
+            Run("K) Near capacity: +2.2 C/h, needs ~93 % at 22.5, outdoor 2±2 C, lag 8+15", k, 4,
+                new[] { new Seg { fromH = 0, toH = 1e9, target = 22.5f } }, h => 2 + 2 * Math.Sin(2 * Math.PI * (h - 9) / 24), "", new Win[0], tbl);
+            // W) Cold front: outdoor 12 °C, falls to 0 °C between 48 and 51 h, flat
+            var w = new Room(22, 3.0, 0.10, 15); w.tauWaterH = 8 / 60.0;
+            Run("W) Cold front: outdoor 12 -> 0 C in 3 h at 48 h, lag 8+15", w, 4,
+                new[] { new Seg { fromH = 0, toH = 1e9, target = 22f } }, h => h < 48 ? 12 : (h < 51 ? 12 - 4 * (h - 48) : 0), "", new Win[0], tbl);
+            // S) Real-like flat with strong sun 8-12 h and a rebound after daily airing
+            SolarProfile = h => { double d = h % 24; return (d >= 8 && d <= 13) ? 3.0 * Math.Sin(Math.PI * (d - 8) / 5) : 0; };
+            bool rb = REBOUND; REBOUND = true;
+            var s = new Room(21, 3.0, 0.10, 15); s.tauWaterH = 8 / 60.0;
+            Run("S) Sun 3 C/h 8-13 h + airing with rebound, lag 8+15, outdoor 8±4", s, 4,
+                new[] { new Seg { fromH = 0, toH = 1e9, target = 22f } }, h => 8 + 4 * Math.Sin(2 * Math.PI * (h - 9) / 24), "", AiringDays(4), tbl);
+            REBOUND = rb;
+            return;
+        }
         if (args.Length > 1 && args[1] == "real") {
             // G/H) Like the user's flat: two-stage lag (boiler water, then radiator mass),
             //      needs ~40 % at 22 °C, outdoor 10±4 °C, daily airing.

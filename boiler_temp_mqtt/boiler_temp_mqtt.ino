@@ -37,6 +37,7 @@
 #include <esp_system.h>      // esp_reset_reason()
 #include <LittleFS.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
 #include "time.h"
 #include <vector>
 
@@ -88,6 +89,19 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_GAIN_SLOPE        0.3f   // °C/h rise with the boiler off = sun/cooking, not heat loss
 #define TPI_RAD_TAU_MIN       12.0f  // radiator lag: the learner's estimate of radiator heat
                                      // follows the boiler with this time constant (see simulation)
+
+// Outdoor-temperature model. With a recent outdoor reading the heat loss is
+// modelled as L = kLoss·(T − Tout) instead of a flat L, so the base duty follows
+// the weather (cold fronts, night/day) before the room drifts. Simulation: time
+// at exactly target 43 → 54 % in the flat-like scenario, cold front ≥0.2 °C off
+// 9 → 4 %, still better with the weather service 2 °C off.
+#define K_LOSS_DEFAULT        (LOSS_DEFAULT / 15.0f)  // °C/h per °C indoor−outdoor
+#define K_LOSS_MIN            0.005f
+#define K_LOSS_MAX            0.4f
+#define WEATHER_INTERVAL      900000UL     // fetch every 15 min (Open-Meteo updates every 15 min)
+#define WEATHER_RETRY         120000UL     // after a failure
+#define WEATHER_MAX_AGE      10800000UL    // older than 3 h → fall back to the flat L
+#define WEATHER_HTTP_TIMEOUT   5000        // ms — must stay well under the 15 s watchdog
 // ================= SYSTEM CONSTANTS =================
 // Door / window detection. The DHT22 reacts slowly, so look for a sustained
 // fall (regression slope) or a total drop below the recent peak.
@@ -140,8 +154,11 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define ADDR_LOSS_RATE       10   // float 4B — learned L
 #define ADDR_INTEG           14   // float 4B — integral term
 #define ADDR_LEARN_N         18   // uint16   — learned cycle count
-// Total used: 20 bytes
-#define VERSION_VALUE        0xB0  // bump whenever EEPROM layout changes
+#define ADDR_K_LOSS          20   // float 4B — learned loss per °C indoor−outdoor
+// Total used: 24 bytes. ADDR_K_LOSS was appended without a version bump: those
+// bytes were never written before (0xFF = NaN) and are range-checked on load,
+// so target, mode and the learned H/L survive the update.
+#define VERSION_VALUE        0xB0  // bump whenever existing EEPROM fields move or change meaning
 
 // ================= LOG FILE =================
 #define LOG_FILE        "/log.txt"
@@ -166,11 +183,12 @@ struct __attribute__((packed)) HistRecord {
 // ================= DIAGNOSTICS =================
 // One record per finished or aborted TPI cycle, exported by GET /export.
 #define FW_VERSION      "v8"
-#define TPI_LOG_FILE    "/tpi.bin"
+#define TPI_LOG_FILE    "/tpi2.bin"   // v2 record (adds tout); the old /tpi.bin is deleted at boot
+#define TPI_LOG_OLD     "/tpi.bin"
 #define TPI_LOG_MAX     600      // when exceeded, trim to …
 #define TPI_LOG_KEEP    432      // … the newest 3 days (144 cycles/day)
 
-struct __attribute__((packed)) CycleRecord {   // 46 bytes
+struct __attribute__((packed)) CycleRecord {   // 50 bytes
   uint32_t ts;              // UTC, cycle end
   float target, tStart, tEnd;
   float duty;               // requested duty
@@ -180,6 +198,7 @@ struct __attribute__((packed)) CycleRecord {   // 46 bytes
   float heat, loss, integ;  // model after this cycle's learning
   uint8_t flags;            // CF_* below
   uint8_t mode;             // 0 auto, 1 manual_on, 2 manual_off
+  float tout;               // outdoor °C from the weather service (NaN if unknown)
 };
 #define CF_LEARN_FULL  0x01   // H and L updated
 #define CF_LEARN_LOSS  0x02   // steady load: only L updated
@@ -225,8 +244,17 @@ float    lossRate  = LOSS_DEFAULT;   // L, °C/h at 0 %
 float    integ     = 0.0f;           // I, duty
 uint16_t learnN    = 0;              // cycles learned so far
 
+float    kLoss     = K_LOSS_DEFAULT; // °C/h per °C indoor−outdoor (weather model)
+
 // RLS covariance (not persisted — re-seeded moderately on boot)
-float rlsP[2][2] = { {1.0f, 0.0f}, {0.0f, 0.25f} };
+float rlsP[2][2]  = { {1.0f, 0.0f}, {0.0f, 0.25f} };
+float rlsPw[2][2] = { {4.0f, 0.0f}, {0.0f, 0.01f} };   // weather model: H and kLoss
+
+// ── Outdoor temperature (Open-Meteo, location from IP or secrets.h) ──
+float         outdoorT       = NAN;
+unsigned long outdoorAtMs    = 0;
+unsigned long lastWeatherTry = 0;
+float         geoLat = NAN, geoLon = NAN;
 
 // ── TPI cycle state ───────────────────────────────────────
 bool          cycleActive    = false;
@@ -264,6 +292,12 @@ TempSample dhtBuf[DHT_BUFFER_SIZE];
 int dhtIdx = 0, dhtFilled = 0;
 unsigned long doorCloseAt = 0;
 
+// (Functions start here: the Arduino builder puts its generated prototypes
+//  before the first function, so every type must be declared above this.)
+bool weatherValid() { return !isnan(outdoorT) && millis() - outdoorAtMs < WEATHER_MAX_AGE; }
+// Heat loss (°C/h with the boiler off) at room temperature T
+float lossAt(float T) { return weatherValid() ? kLoss * fmaxf(1.0f, T - outdoorT) : lossRate; }
+
 // ============================================================
 // EEPROM
 // ============================================================
@@ -274,6 +308,7 @@ void eepromSave() {
   EEPROM.writeFloat(ADDR_LOSS_RATE,  lossRate);
   EEPROM.writeFloat(ADDR_INTEG,      integ);
   EEPROM.writeUShort(ADDR_LEARN_N,   learnN);
+  EEPROM.writeFloat(ADDR_K_LOSS,     kLoss);
   EEPROM.writeByte(ADDR_VERSION,     VERSION_VALUE);
   EEPROM.commit();
 }
@@ -296,6 +331,8 @@ void eepromLoad() {
   integ    = (!isnan(i) && fabsf(i) <= TPI_I_MAX)                  ? i   : 0.0f;
   learnN   = EEPROM.readUShort(ADDR_LEARN_N);
   if (learnN == 0xFFFF) learnN = 0;
+  float kl = EEPROM.readFloat(ADDR_K_LOSS);
+  kLoss    = (!isnan(kl) && kl >= K_LOSS_MIN && kl <= K_LOSS_MAX)  ? kl  : K_LOSS_DEFAULT;
 
   uint8_t md = EEPROM.readByte(ADDR_MODE);
   if      (md == 1) currentMode = MODE_MANUAL_ON;
@@ -643,7 +680,12 @@ void httpExportHandler() {
   snprintf(line, sizeof(line), "humidity,%.0f", humidity);                         exportLine(line);
   snprintf(line, sizeof(line), "door_open,%d", doorOpen ? 1 : 0);                  exportLine(line);
   snprintf(line, sizeof(line), "heat_rate_c_per_h,%.3f", heatRate);                exportLine(line);
-  snprintf(line, sizeof(line), "loss_rate_c_per_h,%.3f", lossRate);                exportLine(line);
+  snprintf(line, sizeof(line), "loss_rate_c_per_h,%.3f", lossAt(target));          exportLine(line);
+  snprintf(line, sizeof(line), "loss_flat_c_per_h,%.3f", lossRate);                exportLine(line);
+  snprintf(line, sizeof(line), "k_loss_c_per_h_per_c,%.4f", kLoss);                exportLine(line);
+  { char to[16]; fmtNum(to, sizeof(to), weatherValid() ? outdoorT : NAN, 1);
+    snprintf(line, sizeof(line), "outdoor_c,%s", to);                              exportLine(line); }
+  snprintf(line, sizeof(line), "outdoor_age_min,%ld", isnan(outdoorT) ? -1L : (long)((millis() - outdoorAtMs) / 60000)); exportLine(line);
   snprintf(line, sizeof(line), "integ,%.4f", integ);                               exportLine(line);
   snprintf(line, sizeof(line), "kp,%.4f", tpiKp());                                exportLine(line);
   snprintf(line, sizeof(line), "learn_n,%u", learnN);                              exportLine(line);
@@ -661,7 +703,7 @@ void httpExportHandler() {
   // ---- cycles ----
   exportLine("");
   exportLine("[cycles]");
-  exportLine("ts_utc,target,t_start,t_end,duty_req,duty_actual,carry,slope_c_per_h,heat_rate,loss_rate,integ,mode,flags");
+  exportLine("ts_utc,target,t_start,t_end,duty_req,duty_actual,carry,slope_c_per_h,heat_rate,loss_rate,integ,mode,flags,tout_c");
   File f = LittleFS.open(TPI_LOG_FILE, "r");
   if (f) {
     CycleRecord r;
@@ -677,9 +719,10 @@ void httpExportHandler() {
       if (r.flags & CF_DOOR)       strcat(fl, "door ");
       if (r.flags & CF_GAIN)       strcat(fl, "gain ");
       size_t fll = strlen(fl); if (fll) fl[fll - 1] = '\0';
-      snprintf(line, sizeof(line), "%lu,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.4f,%u,%s",
+      char to[16]; fmtNum(to, sizeof(to), r.tout, 1);
+      snprintf(line, sizeof(line), "%lu,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.4f,%u,%s,%s",
                (unsigned long)r.ts, r.target, r.tStart, r.tEnd, r.duty, r.actual, r.carry,
-               sl, r.heat, r.loss, r.integ, r.mode, fl);
+               sl, r.heat, r.loss, r.integ, r.mode, fl, to);
       exportLine(line);
     }
     f.close();
@@ -834,7 +877,7 @@ float tpiComputeDuty() {
   float err = target - temperature;
   if (err >= TPI_FULL_ON_ERR)        return 1.0f;
   if (err <= -TPI_OVERSHOOT)         return 0.0f;
-  float base = lossRate / heatRate;          // duty that holds temperature steady
+  float base = lossAt(target) / heatRate;    // duty that holds temperature steady
   float duty = base + tpiKp() * err + integ;
   return constrain(duty, 0.0f, 1.0f);
 }
@@ -848,6 +891,7 @@ void cycleLog(float actualDuty, float slope, uint8_t flags) {
   r.duty   = cycleDuty;  r.actual = actualDuty;     r.carry = dutyCarry;
   r.slope  = slope;      r.heat   = heatRate;       r.loss  = lossRate;
   r.integ  = integ;      r.flags  = flags;          r.mode  = (uint8_t)currentMode;
+  r.tout   = weatherValid() ? outdoorT : NAN;
 
   File f = LittleFS.open(TPI_LOG_FILE, "a");
   if (!f) return;
@@ -923,6 +967,53 @@ void tpiLearn(float u, float slope) {
   if (learnN % TPI_SAVE_EVERY == 0) eepromSave();
 }
 
+// Weather model: RLS on  slope = H·u − kLoss·d,  d = room − outdoor (°C)
+void tpiLearnW(float u, float slope, float d) {
+  float phi[2] = { u, -d };
+  float Pphi[2] = {
+    rlsPw[0][0] * phi[0] + rlsPw[0][1] * phi[1],
+    rlsPw[1][0] * phi[0] + rlsPw[1][1] * phi[1]
+  };
+  float denom = RLS_LAMBDA + phi[0] * Pphi[0] + phi[1] * Pphi[1];
+  float k[2]  = { Pphi[0] / denom, Pphi[1] / denom };
+  float e = slope - (heatRate * u - kLoss * d);
+
+  heatRate = constrain(heatRate + k[0] * e, HEAT_MIN, HEAT_MAX);
+  kLoss    = constrain(kLoss    + k[1] * e, K_LOSS_MIN, K_LOSS_MAX);
+  lossRate = constrain(kLoss * d, LOSS_MIN, LOSS_MAX);   // flat-L fallback stays current
+
+  float newP[2][2];
+  for (int i = 0; i < 2; i++)
+    for (int j = 0; j < 2; j++)
+      newP[i][j] = (rlsPw[i][j] - k[i] * Pphi[j]) / RLS_LAMBDA;
+  float off = 0.5f * (newP[0][1] + newP[1][0]);
+  newP[0][1] = newP[1][0] = off;
+  float tr = newP[0][0] + newP[1][1];
+  if (tr > 10.0f) {
+    float s = 10.0f / tr;
+    for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++) newP[i][j] *= s;
+  }
+  memcpy(rlsPw, newP, sizeof(rlsPw));
+
+  learnN++;
+  char msg[140];
+  snprintf(msg, sizeof(msg),
+    "TPI learn #%u: u=%.2f slope=%.2f°C/h err=%.2f out=%.1f → H=%.2f k=%.4f (L=%.2f)",
+    learnN, u, slope, e, outdoorT, heatRate, kLoss, lossRate);
+  LOG_INFO(msg);
+  if (learnN % TPI_SAVE_EVERY == 0) eepromSave();
+}
+
+void tpiLearnLossOnlyW(float u, float slope, float d) {
+  float e = slope - (heatRate * u - kLoss * d);
+  kLoss    = constrain(kLoss - TPI_LOSS_GAIN * e / d, K_LOSS_MIN, K_LOSS_MAX);
+  lossRate = constrain(kLoss * d, LOSS_MIN, LOSS_MAX);
+  learnN++;
+  Serial.printf("[TPI] learn #%u (steady, weather): u=%.2f slope=%.2f err=%.2f out=%.1f → k=%.4f\n",
+    learnN, u, slope, e, outdoorT, kLoss);
+  if (learnN % TPI_SAVE_EVERY == 0) eepromSave();
+}
+
 // Steady load: the duty barely changes, so H and L can't be told apart
 // (only their ratio is observable). Keep H and the RLS covariance as they
 // are and only nudge L, so the estimate doesn't drift along that line.
@@ -960,8 +1051,14 @@ void tpiEndCycle() {
         } else {
           bool excited = (uAvg < 0.0f) || fabsf(uEff - uAvg) >= TPI_EXCITE;
           uAvg = (uAvg < 0.0f) ? uEff : 0.8f * uAvg + 0.2f * uEff;
-          if (excited) { tpiLearn(uEff, slope);         flags |= CF_LEARN_FULL; }
-          else         { tpiLearnLossOnly(uEff, slope); flags |= CF_LEARN_LOSS; }
+          if (weatherValid()) {
+            float d = fmaxf(1.0f, (float)(sY / sN) - outdoorT);   // mean room − outdoor
+            if (excited) { tpiLearnW(uEff, slope, d);         flags |= CF_LEARN_FULL; }
+            else         { tpiLearnLossOnlyW(uEff, slope, d); flags |= CF_LEARN_LOSS; }
+          } else {
+            if (excited) { tpiLearn(uEff, slope);         flags |= CF_LEARN_FULL; }
+            else         { tpiLearnLossOnly(uEff, slope); flags |= CF_LEARN_LOSS; }
+          }
         }
       } else {
         Serial.printf("[TPI] Slope %.2f°C/h rejected (outlier)\n", slope);
@@ -1003,8 +1100,12 @@ void tpiStartCycle(unsigned long now) {
     // that is nearly full still runs the whole cycle, so weak boilers keep
     // their long runs. Simulation: typical house 7.6 → 6.6 min pulses,
     // 0 min/day above target+0.2, ~12 % more starts.
+    // Above target, high demand may also round down: near the boiler's limit
+    // a request of ~93 % otherwise always became 100 % and the room sat 0.1 °C
+    // high for hours (10 Nov, 22.6 vs 22.5). Alternating 7/10-min burns then
+    // averages the real demand; no extra starts in any simulated scenario.
     bool nearlyFull = onMs * 2 >= 2 * TPI_CYCLE_MS - TPI_MIN_OFF_MS;  // ≥ 8.5 min
-    onMs = (duty >= 0.5f || nearlyFull) ? TPI_CYCLE_MS : TPI_CYCLE_MS - TPI_MIN_OFF_MS;
+    onMs = ((duty >= 0.5f && err >= 0.0f) || nearlyFull) ? TPI_CYCLE_MS : TPI_CYCLE_MS - TPI_MIN_OFF_MS;
   }
   // The user just raised the target and the room is clearly below it: don't
   // make them wait a whole cycle for a demand below the 5-min minimum — fire
@@ -1182,6 +1283,9 @@ void sensorUpdate() {
   float offMin = (!boilerOn && boilerOffAt) ? (millis() - boilerOffAt) / 60000.0f : 0.0f;
   bool  tpiRun = (currentMode == MODE_AUTO && cycleActive);
 
+  char toutStr[12] = "null";
+  if (weatherValid()) snprintf(toutStr, sizeof(toutStr), "%.1f", outdoorT);
+
   char buf[TEMP_PAYLOAD_SIZE];
   int n = snprintf(buf, sizeof(buf),
     "{"
@@ -1192,7 +1296,7 @@ void sensorUpdate() {
     "\"duty\":%.2f,\"cycle_left_s\":%lu,"
     "\"reason\":\"%s\",\"cycle_on_s\":%lu,\"carry\":%.2f,"
     "\"min_on_s\":%lu,\"min_off_s\":%lu,"
-    "\"heat_rate\":%.2f,\"loss_rate\":%.2f,\"rad\":%.2f,"
+    "\"heat_rate\":%.2f,\"loss_rate\":%.2f,\"rad\":%.2f,\"tout\":%s,"
     "\"kp\":%.3f,\"integ\":%.3f,\"learn_n\":%u,"
     "\"on_min\":%.1f,\"off_min\":%.1f,"
     "\"ip\":\"%s\""
@@ -1205,7 +1309,7 @@ void sensorUpdate() {
     tpiRun ? cycleDuty : 0.0f, tpiRun ? tpiCycleLeftS() : 0UL,
     boilerReason(), tpiRun ? cycleOnMs / 1000 : 0UL, dutyCarry,
     TPI_MIN_ON_MS / 1000, TPI_MIN_OFF_MS / 1000,
-    heatRate, lossRate, radHeat,
+    heatRate, lossAt(target), radHeat, toutStr,
     tpiKp(), integ, learnN,
     onMin, offMin,
     espIP
@@ -1265,8 +1369,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         }
       }
       if (doc.containsKey("tpi_reset") && (bool)doc["tpi_reset"]) {
-        heatRate = HEAT_DEFAULT; lossRate = LOSS_DEFAULT; integ = 0; learnN = 0; uAvg = -1.0f;
+        heatRate = HEAT_DEFAULT; lossRate = LOSS_DEFAULT; kLoss = K_LOSS_DEFAULT;
+        integ = 0; learnN = 0; uAvg = -1.0f;
         rlsP[0][0] = 4.0f; rlsP[0][1] = rlsP[1][0] = 0.0f; rlsP[1][1] = 1.0f;
+        rlsPw[0][0] = 4.0f; rlsPw[0][1] = rlsPw[1][0] = 0.0f; rlsPw[1][1] = 0.01f;
         tpiAbort();
         changed = true;
         LOG_WARN("TPI learning reset to defaults");
@@ -1303,6 +1409,69 @@ void mqttConnect() {
     Serial.println("[MQTT] Connected");
   } else {
     Serial.println("[MQTT] Error: " + String(mqttClient.state()));
+  }
+}
+
+// ============================================================
+// OUTDOOR TEMPERATURE (Open-Meteo, free, no key; plain http keeps RAM low)
+// ============================================================
+// GET a small JSON document; false on any network/parse error.
+bool httpGetJson(const char* url, JsonDocument& doc) {
+  esp_task_wdt_reset();
+  HTTPClient http;
+  http.setConnectTimeout(WEATHER_HTTP_TIMEOUT);
+  http.setTimeout(WEATHER_HTTP_TIMEOUT);
+  if (!http.begin(url)) return false;
+  int code = http.GET();
+  bool ok = false;
+  if (code == 200) ok = !deserializeJson(doc, http.getString());
+  else Serial.printf("[WEATHER] HTTP %d for %s\n", code, url);
+  http.end();
+  esp_task_wdt_reset();
+  return ok;
+}
+
+void weatherUpdate() {
+  if (!wifiOk) return;
+  unsigned long now = millis();
+  unsigned long wait = weatherValid() ? WEATHER_INTERVAL : WEATHER_RETRY;
+  if (lastWeatherTry && now - lastWeatherTry < wait) return;
+  lastWeatherTry = now;
+
+  // Location: fixed coordinates from secrets.h if given, otherwise from the
+  // public IP (city level is plenty for the outdoor temperature).
+  if (isnan(geoLat)) {
+#if defined(SECRET_LATITUDE) && defined(SECRET_LONGITUDE)
+    geoLat = SECRET_LATITUDE; geoLon = SECRET_LONGITUDE;
+#else
+    StaticJsonDocument<256> g;
+    if (!httpGetJson("http://ip-api.com/json/?fields=status,lat,lon", g) ||
+        strcmp(g["status"] | "", "success") != 0) {
+      Serial.println("[WEATHER] Location lookup failed");
+      return;
+    }
+    geoLat = g["lat"]; geoLon = g["lon"];
+#endif
+    Serial.printf("[WEATHER] Location %.2f, %.2f\n", geoLat, geoLon);
+  }
+
+  char url[160];
+  snprintf(url, sizeof(url),
+    "http://api.open-meteo.com/v1/forecast?latitude=%.3f&longitude=%.3f&current=temperature_2m",
+    geoLat, geoLon);
+  StaticJsonDocument<768> w;
+  bool hadWeather = weatherValid();
+  if (httpGetJson(url, w) && w["current"]["temperature_2m"].is<float>()) {
+    outdoorT    = w["current"]["temperature_2m"];
+    outdoorAtMs = millis();
+    Serial.printf("[WEATHER] Outdoor %.1f °C\n", outdoorT);
+    if (!hadWeather) {
+      char msg[80];
+      snprintf(msg, sizeof(msg), "Outdoor temperature available: %.1f °C", outdoorT);
+      LOG_INFO(msg);
+    }
+  } else if (hadWeather && !weatherValid()) {
+    LOG_WARN("Outdoor temperature unavailable — using flat heat loss");
   }
 }
 
@@ -1344,6 +1513,7 @@ void setup() {
     LittleFS.format(); LittleFS.begin();
   }
   Serial.println("[LittleFS] OK");
+  if (LittleFS.exists(TPI_LOG_OLD)) LittleFS.remove(TPI_LOG_OLD);   // old 46-byte records
 
   // EEPROM & sensor
   eepromLoad();
@@ -1415,6 +1585,7 @@ void loop() {
   if (now - lastSensor    > SENSOR_INTERVAL)    { lastSensor    = now; sensorUpdate();   }
   if (now - lastHeartbeat > HEARTBEAT_INTERVAL) { lastHeartbeat = now; sendHeartbeat();  }
   if (now - lastLcd       > LCD_INTERVAL)       { lastLcd       = now; lcdUpdate();      }
+  weatherUpdate();   // rate-limited inside (15 min, 2 min after a failure)
 
   delay(50);
 }
