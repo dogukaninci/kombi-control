@@ -131,6 +131,29 @@ is no worse in **every** scenario, never by guessing.
   (see the topic table in `CLAUDE.md`). Decoding was checked in the browser
   with chunks in the firmware's format.
 
+### 11 Nov – room held 0.2 °C high: double correction
+- Learning was reset at 22:17 on 10 Nov. Overnight (outdoor 1.5–2 °C) the
+  room sat at 22.0–22.4 vs 22.5: the model started with the default kLoss
+  (too low), so the integral grew 0.01 → 0.155 while kLoss was learned over
+  ~3 h. Once kLoss was right, both corrected the same shortfall. 11:52:
+  request 86 % = base 82 % − 10 % (room 0.2 above) + 12 % integral → the room
+  settled where P cancels I, ~0.24 °C high, for hours; the integral only bled
+  off at ~0.05/h.
+- Fix: **bumpless transfer** (learning raises/lowers the base `L/H` → the
+  integral gives the same amount back, only toward zero) and `TPI_I_MAX`
+  0.25 → 0.15. Simulator, current → new (time at exactly target / above or
+  below target): A 54 → 56 %, B 37 → 44 % (above 297 → 249 min/day), C 56 →
+  62 %, E above 437 → 193, F 27 → 31 % (above 447 → 372), G 54 → 55 %, H 45 →
+  48 %, S 20 → 27 %, N (new, like this night) below 45 → 10 but above 38 → 69,
+  K below 0 → 64 min/day. Options `BUMPLESS=0`, `IMAX`.
+- New scenario **N** in `extra`: capacity-limited cold night (true H 1.8,
+  loss 0.087/°C), day up to 9 °C with mild sun, target 22.5. The summary line
+  now also prints minutes/day below target − 0.2.
+- The user asked for "faster / harder" reactions. All of these were tested
+  and rejected (see the table below): stronger P overall or only above
+  target, faster integral unwinding, no carry repayment above target, lower
+  overshoot cut. Each made the slow-radiator scenarios oscillate.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |
@@ -146,6 +169,11 @@ is no worse in **every** scenario, never by guessing.
 | Skip 2 more learning cycles after a door/window closes (wall-heat rebound) | S 449 → 495, E 428 → 459 min/day above target |
 | Round down to 7 min at any high demand (not only above target) | C (weak boiler) starts 3.0 → 5.4/h |
 | Also freeze the integral after a cycle that burned 100 % (`AWFULL=1`; 11 Nov: I rose 0.01 → 0.155 on a capacity-limited night while the request was 52–77 % but rounding burned 100 %, then held the room 0.1–0.3 °C high the next morning) | Small gains in most scenarios, but K (near capacity, the case it targets) got worse: at target 45 → 40 %, ≥ 0.2 off 11 → 15 %. Not adopted; the excess integral bleeds off in ~3 h |
+| Stronger proportional gain: `TPI_HORIZON_H` 1.5 → 1.0 h (`HORIZON=1.0`) | H (slow radiators) at target 45 → 16 %, ≥ 0.2 off 7 → 51 %; D above 437 → 537 min/day |
+| Stronger proportional only while above target (`KPABOVE=2`) | H at target 45 → 15 %, ≥ 0.2 off 7 → 53 % |
+| Unwind a wrong-way integral 3×/5× faster (`UNWIND`) | H at target 45 → 32 % / 22 %; N above 38 → 71 / 47 min/day |
+| Above target, don't repay carried duty with catch-up burns (`NOCARRYABOVE=1`) | G at target 54 → 25 %, H 45 → 16 % |
+| Cut the burn / skip the cycle already at target + 0.25 (`OVER=0.25`, now 0.4) | H above 0 → 213 min/day; A 54 → 50 % |
 | Stretch the cycle at high demand so the 3-min OFF stays and ON/(ON+OFF) = demand (e.g. 17/3, 37/3 min); `STRETCH=<max min>`, `STRETCHFROM` | From 70 %, max 30 min: G at target 54 → 34 %, H 45 → 16 % (≥ 0.2 off 7 → 52 %), C starts 3.1 → 5.4/h. Milder (from 85 %, max 20 min): G 54 → 43 %, H 45 → 25 %, K 45 → 41 %. Long burns can't react to radiator lag; only the cold front (W) improved slightly |
 
 ## Facts learned about this flat

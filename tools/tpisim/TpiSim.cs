@@ -7,9 +7,9 @@ using System.Collections.Generic;
 class Tpi {
     // ---- constants (copied from firmware) ----
     const ulong TPI_CYCLE_MS = 600000, TPI_MIN_ON_MS = 300000, TPI_MIN_OFF_MS = 180000;
-    const float TPI_HORIZON_H = 1.5f, TPI_I_MAX = 0.25f;
+    public static float TPI_HORIZON_H = 1.5f; public static float TPI_I_MAX = 0.15f;   // firmware TPI_I_MAX
     public static float TPI_TI_H = 2.0f;    // firmware TPI_TI_H
-    const float TPI_OVERSHOOT = 0.4f, TPI_FULL_ON_ERR = 2.0f;
+    public static float TPI_OVERSHOOT = 0.4f; const float TPI_FULL_ON_ERR = 2.0f;
     const int TPI_MIN_SAMPLES = 100;
     const float HEAT_DEFAULT = 2.0f, LOSS_DEFAULT = 0.5f;
     const float HEAT_MIN = 0.3f, HEAT_MAX = 8.0f, LOSS_MAX = 4.0f;
@@ -59,6 +59,10 @@ class Tpi {
     public static double STRETCH_MAX_MIN = 0;   // >0: high demand lengthens the cycle up to this (min) instead of rounding
     public static float STRETCH_FROM = 0.7f;  public int stretched = 0;
     public static bool AWFULL = false;   // also freeze the integral after a cycle that burned 100 %
+    public static float UNWIND = 1f, UNWIND_ERR = 0.1f;   // integral opposing the error moves UNWIND× faster
+    public static bool NOCARRYABOVE = false;           // above target: no catch-up burns for carried duty
+    public static bool BUMPLESS = true;                // firmware: learning raises the base → integral gives the same amount back
+    public static float KP_ABOVE = 1f;                 // proportional gain multiplier while above target
     public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
     public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
     const float K_MIN = 0.005f, K_MAX = 0.4f;
@@ -78,7 +82,7 @@ class Tpi {
         if (err <= -TPI_OVERSHOOT)  return 0.0f;
         if (LAGPRED && LAG_TAU_MIN > 0) err -= (float)(PRED_GAIN * heatRate * rHat * LAG_TAU_MIN / 60.0);
         float b = LossAt(target) / heatRate;
-        float duty = b + tpiKp() * err + integ;
+        float duty = b + tpiKp() * err * (err < 0 ? KP_ABOVE : 1f) + integ;
         return Clamp(duty, 0.0f, 1.0f);
     }
 
@@ -152,11 +156,17 @@ class Tpi {
                         bool excited = (uAvg < 0) || Math.Abs(uEff - uAvg) >= TPI_EXCITE;
                         uAvg = (uAvg < 0) ? uEff : 0.8f * uAvg + 0.2f * uEff;
                         float tMean = (float)(sY / sN);
+                        float base0 = LossAt(target) / heatRate;   // model base before learning
                         if (SKIPCUT && cycleCut) { gainSkips++; }
                         else if (GAINFIX && slope > 0.3f + heatRate * uEff && (GAINRULE == 1 ? actualDuty <= 0.0f : (LAG_TAU_MIN > 0 ? uEff < 0.1f : uEff <= 0.0f))) { gainSkips++; }
                         else if (SUNSKIP && actualDuty <= 0.0f && tMean >= target + SUN_ABOVE) { gainSkips++; sunSkips++; }
                         else if (UseW) { float d = Math.Max(1f, tMean - tout); if (excited) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
                         else if (excited) tpiLearn(uEff, slope); else tpiLearnLossOnly(uEff, slope);
+                        if (BUMPLESS) {   // the model now covers what the integral was compensating
+                            float dlt = LossAt(target) / heatRate - base0;
+                            if (integ > 0 && dlt > 0) integ = Math.Max(0f, integ - dlt);
+                            else if (integ < 0 && dlt < 0) integ = Math.Min(0f, integ - dlt);
+                        }
                     }
                 } else rejected++;
             }
@@ -172,7 +182,9 @@ class Tpi {
         bool satHi = (duty >= 1.0f && err > 0) || (AWFULL && prevActualDuty >= 0.999f && err > 0), satLo = (duty <= 0.0f && err < 0);
         if (!skipLearnNext && !satHi && !satLo && Math.Abs(err) < TPI_FULL_ON_ERR) {
             float cycleH = cyclePeriodMs / 3600000.0f;
-            integ = Clamp(integ + (tpiKp() / TPI_TI_H) * err * cycleH, -TPI_I_MAX, TPI_I_MAX);
+            float iStep = (tpiKp() / TPI_TI_H) * err * cycleH;
+            if (UNWIND > 1 && integ * err < 0 && Math.Abs(err) >= UNWIND_ERR) iStep *= UNWIND;   // wrong-way integral: unwind faster
+            integ = Clamp(integ + iStep, -TPI_I_MAX, TPI_I_MAX);
             duty = tpiComputeDuty();
         }
         ulong onMs;
@@ -199,6 +211,7 @@ class Tpi {
             else if (TPI_CYCLE_MS - onMs < TPI_MIN_OFF_MS) onMs = TPI_CYCLE_MS;
         } else {
             if (duty <= 0.0f) dutyCarry = 0.0f;
+            if (NOCARRYABOVE && err < 0 && dutyCarry > 0) dutyCarry = 0;   // above target: forgive owed duty
             float want = Clamp(duty + dutyCarry, 0.0f, 1.0f);
             onMs = (ulong)(want * TPI_CYCLE_MS);
             if (onMs < TPI_MIN_ON_MS) onMs = (ROUND_NEAREST && onMs * 2 >= TPI_MIN_ON_MS) ? TPI_MIN_ON_MS : 0;
@@ -329,7 +342,7 @@ class Program {
         long steps = (long)(days * 86400 / dtS);
         bool boiler = false, prevBoiler = false;
         double meanErr = 0; long atTarget = 0, offBy2 = 0;
-        int starts = 0; double onMinTotal = 0, aboveMin = 0, settledSq = 0; long settledN = 0;
+        int starts = 0; double onMinTotal = 0, aboveMin = 0, belowMin = 0, settledSq = 0; long settledN = 0;
         // per-6h buckets
         double bSum = 0, bSq = 0, bMin = 99, bMax = -99, bOn = 0; int bN = 0, bStarts = 0;
         float curTarget = targets[0].target;
@@ -370,7 +383,7 @@ class Program {
             else boiler = tpi.tpiControl();
             if (boiler && !prevBoiler) { starts++; bStarts++; }
             if (boiler) onMinTotal += dtS / 60.0;
-            if (hours > 12) { if (room.T > curTarget + 0.2) aboveMin += dtS / 60.0; meanErr += meas - curTarget; if (Math.Abs(meas - curTarget) < 0.05) atTarget++; if (Math.Abs(meas - curTarget) > 0.15) offBy2++; settledSq += (room.T - curTarget) * (room.T - curTarget); settledN++; }
+            if (hours > 12) { if (room.T > curTarget + 0.2) aboveMin += dtS / 60.0; if (room.T < curTarget - 0.2) belowMin += dtS / 60.0; meanErr += meas - curTarget; if (Math.Abs(meas - curTarget) < 0.05) atTarget++; if (Math.Abs(meas - curTarget) > 0.15) offBy2++; settledSq += (room.T - curTarget) * (room.T - curTarget); settledN++; }
             prevBoiler = boiler;
             room.Step(boiler, tout(hours), dtH);
             { int day = (int)(hours / 24); double hd = hours % 24; if (hd >= 16 && hd < 19) { if (!eveMin.ContainsKey(day) || room.T < eveMin[day]) eveMin[day] = room.T; if (room.T < curTarget - 0.3) eveLow[day] = (eveLow.ContainsKey(day) ? eveLow[day] : 0) + dtH * 60; } }
@@ -386,7 +399,7 @@ class Program {
             }
         }
         Console.WriteLine("  sensor after 12 h: mean offset {0:+0.000;-0.000} C, reads exactly target {1:F0}%, off by >=0.2 {2:F0}%", meanErr / Math.Max(1, settledN), 100.0 * atTarget / Math.Max(1, settledN), 100.0 * offBy2 / Math.Max(1, settledN));
-        Console.WriteLine("  avg ON pulse {0:F1} min, after 12 h: RMS {1:F3} °C, {2:F0} min/day above target+0.2", starts > 0 ? onMinTotal / starts : 0, Math.Sqrt(settledSq / Math.Max(1, settledN)), aboveMin / Math.Max(0.01, (days * 24 - 12) / 24));
+        Console.WriteLine("  avg ON pulse {0:F1} min, after 12 h: RMS {1:F3} °C, {2:F0} min/day above target+0.2, {3:F0} min/day below target-0.2", starts > 0 ? onMinTotal / starts : 0, Math.Sqrt(settledSq / Math.Max(1, settledN)), aboveMin / Math.Max(0.01, (days * 24 - 12) / 24), belowMin / Math.Max(0.01, (days * 24 - 12) / 24));
         Console.WriteLine("  final learned H {0:F2} L {1:F2} (L/H {2:F2}; true H {3:F2}, L at target {4:F2}, L/H {5:F2}), I {6:F3}",
             tpi.heatRate, tpi.lossRate, tpi.lossRate / tpi.heatRate, room.a, room.b * (curTarget - tout(days * 24)), room.b * (curTarget - tout(days * 24)) / room.a, tpi.integ);
         Console.WriteLine("  gain-skipped learning cycles: {0} (sun-above-target {2}), door-skipped {3}, undershoot kicks: {1}", tpi.gainSkips, tpi.lagKicks, tpi.sunSkips, tpi.doorSkips);
@@ -433,6 +446,14 @@ class Program {
         ev = Environment.GetEnvironmentVariable("DOORSKIP"); if (!string.IsNullOrEmpty(ev)) Tpi.DOORSKIP = int.Parse(ev);
         ev = Environment.GetEnvironmentVariable("WBIAS"); if (!string.IsNullOrEmpty(ev)) WBIAS = double.Parse(ev, inv);
         Tpi.AWFULL = Environment.GetEnvironmentVariable("AWFULL") == "1";
+        ev = Environment.GetEnvironmentVariable("HORIZON"); if (!string.IsNullOrEmpty(ev)) Tpi.TPI_HORIZON_H = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("OVER"); if (!string.IsNullOrEmpty(ev)) Tpi.TPI_OVERSHOOT = float.Parse(ev, inv);
+        Tpi.NOCARRYABOVE = Environment.GetEnvironmentVariable("NOCARRYABOVE") == "1";
+        Tpi.BUMPLESS = Environment.GetEnvironmentVariable("BUMPLESS") != "0";
+        ev = Environment.GetEnvironmentVariable("IMAX"); if (!string.IsNullOrEmpty(ev)) Tpi.TPI_I_MAX = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("KPABOVE"); if (!string.IsNullOrEmpty(ev)) Tpi.KP_ABOVE = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("UNWIND"); if (!string.IsNullOrEmpty(ev)) Tpi.UNWIND = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("UNWINDERR"); if (!string.IsNullOrEmpty(ev)) Tpi.UNWIND_ERR = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("STRETCH"); if (!string.IsNullOrEmpty(ev)) Tpi.STRETCH_MAX_MIN = double.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("STRETCHFROM"); if (!string.IsNullOrEmpty(ev)) Tpi.STRETCH_FROM = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("SUNABOVE"); if (!string.IsNullOrEmpty(ev)) Tpi.SUN_ABOVE = float.Parse(ev, inv);
@@ -454,6 +475,12 @@ class Program {
             Run("S) Sun 3 C/h 8-13 h + airing with rebound, lag 8+15, outdoor 8±4", s, 4,
                 new[] { new Seg { fromH = 0, toH = 1e9, target = 22f } }, h => 8 + 4 * Math.Sin(2 * Math.PI * (h - 9) / 24), "", AiringDays(4), tbl);
             REBOUND = rb;
+            // N) Like 10–11 Nov: capacity-limited cold night (holds ~22.2 at 1.5 °C outside), then a
+            //    milder day up to 9 °C with a little sun — the integral built at night must unwind
+            SolarProfile = h => { double d = h % 24; return (d >= 11 && d <= 15) ? 0.6 * Math.Sin(Math.PI * (d - 11) / 4) : 0; };
+            var nr = new Room(22, 1.8, 0.087, 15); nr.tauWaterH = 8 / 60.0;
+            Run("N) Like 11 Nov: 1.8 C/h, cold night at capacity, day up to 9 C + mild sun, target 22.5", nr, 4,
+                new[] { new Seg { fromH = 0, toH = 1e9, target = 22.5f } }, h => 5.25 + 3.75 * Math.Sin(2 * Math.PI * (h - 8) / 24), "", new Win[0], tbl);
             return;
         }
         if (args.Length > 1 && args[1] == "real") {
