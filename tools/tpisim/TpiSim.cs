@@ -58,6 +58,7 @@ class Tpi {
     public static float SUN_ABOVE = 1.0f;    // SUNSKIP: boiler off and room this far above target
     public static double STRETCH_MAX_MIN = 0;   // >0: high demand lengthens the cycle up to this (min) instead of rounding
     public static float STRETCH_FROM = 0.7f;  public int stretched = 0;
+    public static bool AWFULL = false;   // also freeze the integral after a cycle that burned 100 %
     public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
     public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
     const float K_MIN = 0.005f, K_MAX = 0.4f;
@@ -168,7 +169,7 @@ class Tpi {
         startErr = Math.Abs(target - temperature);
         float err = target - temperature;
         float duty = tpiComputeDuty();
-        bool satHi = (duty >= 1.0f && err > 0), satLo = (duty <= 0.0f && err < 0);
+        bool satHi = (duty >= 1.0f && err > 0) || (AWFULL && prevActualDuty >= 0.999f && err > 0), satLo = (duty <= 0.0f && err < 0);
         if (!skipLearnNext && !satHi && !satLo && Math.Abs(err) < TPI_FULL_ON_ERR) {
             float cycleH = cyclePeriodMs / 3600000.0f;
             integ = Clamp(integ + (tpiKp() / TPI_TI_H) * err * cycleH, -TPI_I_MAX, TPI_I_MAX);
@@ -431,6 +432,7 @@ class Program {
         REBOUND = Environment.GetEnvironmentVariable("REBOUND") == "1";
         ev = Environment.GetEnvironmentVariable("DOORSKIP"); if (!string.IsNullOrEmpty(ev)) Tpi.DOORSKIP = int.Parse(ev);
         ev = Environment.GetEnvironmentVariable("WBIAS"); if (!string.IsNullOrEmpty(ev)) WBIAS = double.Parse(ev, inv);
+        Tpi.AWFULL = Environment.GetEnvironmentVariable("AWFULL") == "1";
         ev = Environment.GetEnvironmentVariable("STRETCH"); if (!string.IsNullOrEmpty(ev)) Tpi.STRETCH_MAX_MIN = double.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("STRETCHFROM"); if (!string.IsNullOrEmpty(ev)) Tpi.STRETCH_FROM = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("SUNABOVE"); if (!string.IsNullOrEmpty(ev)) Tpi.SUN_ABOVE = float.Parse(ev, inv);

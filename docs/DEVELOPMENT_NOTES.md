@@ -145,6 +145,7 @@ is no worse in **every** scenario, never by guessing.
 | Don't learn heat loss when the boiler is off and the room is ≥ 1 °C above target (sun holding the room flat) | Alone: small gain in S; with the weather model: S 495 → 520, D 437 → 526 min/day above target |
 | Skip 2 more learning cycles after a door/window closes (wall-heat rebound) | S 449 → 495, E 428 → 459 min/day above target |
 | Round down to 7 min at any high demand (not only above target) | C (weak boiler) starts 3.0 → 5.4/h |
+| Also freeze the integral after a cycle that burned 100 % (`AWFULL=1`; 11 Nov: I rose 0.01 → 0.155 on a capacity-limited night while the request was 52–77 % but rounding burned 100 %, then held the room 0.1–0.3 °C high the next morning) | Small gains in most scenarios, but K (near capacity, the case it targets) got worse: at target 45 → 40 %, ≥ 0.2 off 11 → 15 %. Not adopted; the excess integral bleeds off in ~3 h |
 | Stretch the cycle at high demand so the 3-min OFF stays and ON/(ON+OFF) = demand (e.g. 17/3, 37/3 min); `STRETCH=<max min>`, `STRETCHFROM` | From 70 %, max 30 min: G at target 54 → 34 %, H 45 → 16 % (≥ 0.2 off 7 → 52 %), C starts 3.1 → 5.4/h. Milder (from 85 %, max 20 min): G 54 → 43 %, H 45 → 25 %, K 45 → 41 %. Long burns can't react to radiator lag; only the cold front (W) improved slightly |
 
 ## Facts learned about this flat
