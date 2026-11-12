@@ -62,6 +62,9 @@ class Tpi {
     public static float UNWIND = 1f, UNWIND_ERR = 0.1f;   // integral opposing the error moves UNWIND× faster
     public static bool NOCARRYABOVE = false;           // above target: no catch-up burns for carried duty
     public static bool BUMPLESS = true;                // firmware: learning raises the base → integral gives the same amount back
+    public static float BUMP_MIN = 0f;                 // transfer only the part of |I| above this (keeps small offsets correctable)
+    public static int BUMP_MODE = 1;                   // 1 = toward zero only, 2 = symmetric (base+I constant)
+    public static int BUMP_LEARN_N = 72;               // firmware TPI_BUMP_LEARN_N: transfer only while the model is fresh
     public static float KP_ABOVE = 1f;                 // proportional gain multiplier while above target
     public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
     public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
@@ -162,10 +165,11 @@ class Tpi {
                         else if (SUNSKIP && actualDuty <= 0.0f && tMean >= target + SUN_ABOVE) { gainSkips++; sunSkips++; }
                         else if (UseW) { float d = Math.Max(1f, tMean - tout); if (excited) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
                         else if (excited) tpiLearn(uEff, slope); else tpiLearnLossOnly(uEff, slope);
-                        if (BUMPLESS) {   // the model now covers what the integral was compensating
+                        if (BUMPLESS && learnN < BUMP_LEARN_N) {   // the model now covers what the integral was compensating
                             float dlt = LossAt(target) / heatRate - base0;
-                            if (integ > 0 && dlt > 0) integ = Math.Max(0f, integ - dlt);
-                            else if (integ < 0 && dlt < 0) integ = Math.Min(0f, integ - dlt);
+                            if (BUMP_MODE == 2) integ = Clamp(integ - dlt, -TPI_I_MAX, TPI_I_MAX);   // symmetric: base+I unchanged by learning
+                            else if (integ > BUMP_MIN && dlt > 0) integ = Math.Max(BUMP_MIN, integ - dlt);
+                            else if (integ < -BUMP_MIN && dlt < 0) integ = Math.Min(-BUMP_MIN, integ - dlt);
                         }
                     }
                 } else rejected++;
@@ -292,13 +296,15 @@ class Room {
     public double T, r = 0, w = 0, a, b, tauRadH, tauWaterH = 0;
     public double windowLoss = 0;               // extra °C/h while a window/door is open
     public double solar = 0;                    // extra °C/h from sun / other heat sources
+    public double gain0 = 0;                    // constant internal gains (people, appliances, neighbours), °C/h
+    public double dist = 0;                     // random free-heat disturbance (°C/h), new value every 30 min
     public double sensor;                       // DHT22 reading lags the air (τ ≈ 1.5 min)
     public Room(double T0, double a_, double b_, double tauMin) { T = T0; sensor = T0; a = a_; b = b_; tauRadH = tauMin / 60.0; }
     public void Step(bool boiler, double tout, double dtH) {
         double drive = boiler ? 1.0 : 0.0;
         if (tauWaterH > 0) { w += (drive - w) * dtH / tauWaterH; drive = w; }
         r += (drive - r) * dtH / tauRadH;
-        T += (a * r - b * (T - tout) - windowLoss + solar) * dtH;
+        T += (a * r - b * (T - tout) - windowLoss + solar + gain0 + dist) * dtH;
         sensor += (T - sensor) * dtH / (1.5 / 60.0);
     }
 }
@@ -308,6 +314,8 @@ class Program {
     static Func<double,double> SolarProfile = h => 0;
     static double WBIAS = 0;      // weather API reads this much off the real outdoor temperature
     static bool REBOUND = false;  // airing followed by a wall-heat rebound
+    static double GAIN0 = 0;      // constant internal gains in every scenario (model bias the integral must fix)
+    static double DIST = 0;       // std of random free-heat disturbances (°C/h, 30-min steps): real-home learning noise
     static double Gauss() { double u1 = 1.0 - rng.NextDouble(), u2 = rng.NextDouble(); return Math.Sqrt(-2*Math.Log(u1))*Math.Cos(2*Math.PI*u2); }
 
     class Seg { public double fromH, toH; public float target; }
@@ -337,6 +345,8 @@ class Program {
         Console.WriteLine("=== " + name + " ===");
         Console.WriteLine(note);
         var tpi = new Tpi();
+        room.gain0 = GAIN0;
+        var drng = new Random(7); int distSlot = -1;
         const double dtS = 3.0;
         double dtH = dtS / 3600.0;
         long steps = (long)(days * 86400 / dtS);
@@ -355,6 +365,7 @@ class Program {
             }
             tpi.target = curTarget;
             room.solar = SolarProfile(hours);
+            if (DIST > 0 && (int)(hours * 2) != distSlot) { distSlot = (int)(hours * 2); double u1 = 1.0 - drng.NextDouble(), u2 = drng.NextDouble(); room.dist = DIST * Math.Sqrt(-2 * Math.Log(u1)) * Math.Cos(2 * Math.PI * u2); }
             // Window events
             room.windowLoss = 0; Win active = null;
             foreach (var w in wins) if (hours >= w.atH && hours < w.atH + w.minutes / 60.0) { room.windowLoss = w.lossPerH; active = w; }
@@ -450,6 +461,11 @@ class Program {
         ev = Environment.GetEnvironmentVariable("OVER"); if (!string.IsNullOrEmpty(ev)) Tpi.TPI_OVERSHOOT = float.Parse(ev, inv);
         Tpi.NOCARRYABOVE = Environment.GetEnvironmentVariable("NOCARRYABOVE") == "1";
         Tpi.BUMPLESS = Environment.GetEnvironmentVariable("BUMPLESS") != "0";
+        ev = Environment.GetEnvironmentVariable("BUMPMIN"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_MIN = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("BUMPN"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_LEARN_N = int.Parse(ev);
+        ev = Environment.GetEnvironmentVariable("BUMPMODE"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_MODE = int.Parse(ev);
+        ev = Environment.GetEnvironmentVariable("GAIN0"); if (!string.IsNullOrEmpty(ev)) GAIN0 = double.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("DIST"); if (!string.IsNullOrEmpty(ev)) DIST = double.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("IMAX"); if (!string.IsNullOrEmpty(ev)) Tpi.TPI_I_MAX = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("KPABOVE"); if (!string.IsNullOrEmpty(ev)) Tpi.KP_ABOVE = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("UNWIND"); if (!string.IsNullOrEmpty(ev)) Tpi.UNWIND = float.Parse(ev, inv);

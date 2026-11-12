@@ -66,6 +66,7 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_TI_H              2.0f   // integral time constant (4 h left the room ~0.1 °C off
                                      // for hours; 1 h oscillated with slow radiators — simulation)
 #define TPI_I_MAX             0.15f  // integral clamp (± duty); 0.25 let a night's windup overheat the next day
+#define TPI_BUMP_LEARN_N      72     // bumpless integral transfer only for the first ~12 h after a reset
 #define TPI_OVERSHOOT         0.4f   // T >= target + this → boiler off now
 #define TPI_FULL_ON_ERR       2.0f   // T <= target − this → 100 % duty
 #define TPI_MIN_SAMPLES       100    // samples needed to learn from a cycle
@@ -1081,14 +1082,19 @@ void tpiEndCycle() {
             if (excited) { tpiLearn(uEff, slope);         flags |= CF_LEARN_FULL; }
             else         { tpiLearnLossOnly(uEff, slope); flags |= CF_LEARN_LOSS; }
           }
-          // Bumpless transfer: whatever the model now covers, the integral gives back.
-          // After a reset (11 Nov) the integral grew to 0.155 while kLoss was still
-          // being learned; once the model caught up both corrected the same shortfall
-          // and held the room ~0.2 °C high for hours. Simulation: equal or better in
-          // 9 of 12 scenarios (window scenario 437 → 193 min/day above target).
-          float dBase = lossAt(target) / heatRate - base0;
-          if      (integ > 0.0f && dBase > 0.0f) integ = fmaxf(0.0f, integ - dBase);
-          else if (integ < 0.0f && dBase < 0.0f) integ = fminf(0.0f, integ - dBase);
+          // Bumpless transfer, only while the model is fresh (first TPI_BUMP_LEARN_N
+          // learned cycles after a reset): whatever the model now covers, the
+          // integral gives back. After the 10 Nov reset the integral grew to 0.155
+          // while kLoss was still being learned; once the model caught up both
+          // corrected the same shortfall and held the room ~0.2 °C high for hours.
+          // Not later: with 5–7-min pulses the loss estimate swings ±0.05 every
+          // 3 cycles (radiator after-heat), and on 12 Nov that reset a negative
+          // integral to 0 nine times in one night, leaving the room +0.1 °C high.
+          if (learnN <= TPI_BUMP_LEARN_N) {
+            float dBase = lossAt(target) / heatRate - base0;
+            if      (integ > 0.0f && dBase > 0.0f) integ = fmaxf(0.0f, integ - dBase);
+            else if (integ < 0.0f && dBase < 0.0f) integ = fminf(0.0f, integ - dBase);
+          }
         }
       } else {
         Serial.printf("[TPI] Slope %.2f°C/h rejected (outlier)\n", slope);

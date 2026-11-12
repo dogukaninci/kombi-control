@@ -154,6 +154,30 @@ is no worse in **every** scenario, never by guessing.
   target, faster integral unwinding, no carry repayment above target, lower
   overshoot cut. Each made the slow-radiator scenarios oscillate.
 
+### 12 Nov – the bumpless transfer became a ratchet
+- Target 22.0 since 11 Nov 14:03 (mild, outdoor 5–13 °C, demand 10–30 %).
+  The room sat at 22.1–22.2 all night: hourly means 22.10–22.14, 0–30 % of
+  the time at exactly 22.0. No window alarms, no swings — the sensor reading
+  is much calmer than before the move.
+- Cause (from every night cycle): with 5–7-min pulses the learned loss swings
+  ±0.05 in a 3-cycle pattern — burn cycle (room flat), next cycle +0.6 °C/h
+  with the boiler off (radiator after-heat) → L down, then −0.7 °C/h → L up.
+  Each "L down" step made the bumpless rule reset the negative integral to 0
+  (9 times between 02:30 and 07:30), so the integral never got past −0.04 and
+  couldn't remove the +0.1 °C offset. Without the reset it would have reached
+  the −0.1 it needed within ~4 h.
+- Fix: transfer only while `learnN ≤ TPI_BUMP_LEARN_N` (72 cycles ≈ 12 h
+  after a reset — when the 11 Nov double correction happened). The simulator
+  doesn't reproduce the 3-cycle swing (its room is too clean); always / never
+  / fresh-only came out within noise of each other, with and without a model
+  bias. New simulator options: `GAIN0` (constant internal gains, °C/h — a
+  bias the zero-intercept weather model can't represent), `DIST` (random
+  free-heat disturbances, 30-min steps), `BUMPN`, `BUMPMIN`, `BUMPMODE`.
+- The real burn-to-rise delay now looks longer than the 12-min radiator
+  estimate (the room rises in the cycle *after* a 7-min burn). Possibly the
+  new sensor spot; check `TPI_RAD_TAU_MIN` against a few more reports before
+  changing it.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |
