@@ -68,11 +68,57 @@ class Tpi {
     public static float KP_ABOVE = 1f;                 // proportional gain multiplier while above target
     public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
     public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
-    const float K_MIN = 0.005f, K_MAX = 0.4f;
+    public static float K_MIN = 0.005f; const float K_MAX = 0.4f;
     float[,] rlsPw = { { 4.0f, 0 }, { 0, 0.01f } };
+    // Internal-gain model: net loss = kLoss·(T − tout) − gainG (people, appliances,
+    // neighbours). H, kLoss and gainG share one 3×3 covariance; steady cycles update
+    // only (kLoss, gainG), which day/night outdoor swings make identifiable.
+    public static bool GMODEL = false;
+    public static float G_LAMBDA_STEADY = 0.99f;
+    public float gainG = 0f; const float G_MAX = 1.5f;
+    float[,] P3 = { { 4.0f, 0, 0 }, { 0, 0.01f, 0 }, { 0, 0, 0.25f } };
     int skipCycles = 0;
     bool UseW { get { return WEATHER && !float.IsNaN(tout); } }
-    float LossAt(float T) { return UseW ? kLoss * Math.Max(1f, T - tout) : lossRate; }
+    float LossAt(float T) { return UseW ? kLoss * Math.Max(1f, T - tout) - (GMODEL ? gainG : 0f) : lossRate; }
+
+    // Full update of [H, kLoss, gainG]:  slope = H·u − kLoss·d + gainG
+    void tpiLearnG(float u, float slope, float d) {
+        float[] phi = { u, -d, 1f };
+        float[] Pphi = new float[3];
+        for (int i = 0; i < 3; i++) Pphi[i] = P3[i,0]*phi[0] + P3[i,1]*phi[1] + P3[i,2]*phi[2];
+        float denom = RLS_LAMBDA + phi[0]*Pphi[0] + phi[1]*Pphi[1] + phi[2]*Pphi[2];
+        float e = slope - (heatRate * u - kLoss * d + gainG);
+        heatRate = Clamp(heatRate + Pphi[0] / denom * e, HEAT_MIN, HEAT_MAX);
+        kLoss    = Clamp(kLoss    + Pphi[1] / denom * e, K_MIN, K_MAX);
+        gainG    = Clamp(gainG    + Pphi[2] / denom * e, 0f, G_MAX);
+        float[,] nP = new float[3,3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) nP[i,j] = (P3[i,j] - Pphi[i] / denom * Pphi[j]) / RLS_LAMBDA;
+        SymCap(nP, 3); P3 = nP;
+        lossRate = Clamp(kLoss * d - gainG, LOSS_MIN, LOSS_MAX);
+        learnN++;
+    }
+
+    // Steady load: H is not observable; update (kLoss, gainG) only, H held fixed
+    void tpiLearnSteadyG(float u, float slope, float d) {
+        float y = slope - heatRate * u;                    // = −kLoss·d + gainG + noise
+        float[] phi = { -d, 1f };
+        float[] Pphi = { P3[1,1]*phi[0] + P3[1,2]*phi[1], P3[2,1]*phi[0] + P3[2,2]*phi[1] };
+        float denom = G_LAMBDA_STEADY + phi[0]*Pphi[0] + phi[1]*Pphi[1];
+        float e = y - (-kLoss * d + gainG);
+        kLoss = Clamp(kLoss + Pphi[0] / denom * e, K_MIN, K_MAX);
+        gainG = Clamp(gainG + Pphi[1] / denom * e, 0f, G_MAX);
+        for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++)
+            P3[i+1,j+1] = (P3[i+1,j+1] - Pphi[i] / denom * Pphi[j]) / G_LAMBDA_STEADY;
+        SymCap(P3, 3);
+        lossRate = Clamp(kLoss * d - gainG, LOSS_MIN, LOSS_MAX);
+        learnN++;
+    }
+
+    static void SymCap(float[,] P, int n) {
+        for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) { float o = 0.5f * (P[i,j] + P[j,i]); P[i,j] = P[j,i] = o; }
+        float tr = 0; for (int i = 0; i < n; i++) tr += P[i,i];
+        if (tr > 10.0f) { float s = 10.0f / tr; for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) P[i,j] *= s; }
+    }
     public void tpiAbortDoor() { tpiAbort(); skipCycles = DOORSKIP; }
 
     static float Clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -84,7 +130,7 @@ class Tpi {
         if (err >= TPI_FULL_ON_ERR) return 1.0f;
         if (err <= -TPI_OVERSHOOT)  return 0.0f;
         if (LAGPRED && LAG_TAU_MIN > 0) err -= (float)(PRED_GAIN * heatRate * rHat * LAG_TAU_MIN / 60.0);
-        float b = LossAt(target) / heatRate;
+        float b = Math.Max(0f, LossAt(target)) / heatRate;   // free heat can't be "removed"
         float duty = b + tpiKp() * err * (err < 0 ? KP_ABOVE : 1f) + integ;
         return Clamp(duty, 0.0f, 1.0f);
     }
@@ -163,7 +209,9 @@ class Tpi {
                         if (SKIPCUT && cycleCut) { gainSkips++; }
                         else if (GAINFIX && slope > 0.3f + heatRate * uEff && (GAINRULE == 1 ? actualDuty <= 0.0f : (LAG_TAU_MIN > 0 ? uEff < 0.1f : uEff <= 0.0f))) { gainSkips++; }
                         else if (SUNSKIP && actualDuty <= 0.0f && tMean >= target + SUN_ABOVE) { gainSkips++; sunSkips++; }
-                        else if (UseW) { float d = Math.Max(1f, tMean - tout); if (excited) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
+                        else if (UseW) { float d = Math.Max(1f, tMean - tout);
+                            if (GMODEL) { if (excited) tpiLearnG(uEff, slope, d); else tpiLearnSteadyG(uEff, slope, d); }
+                            else if (excited) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
                         else if (excited) tpiLearn(uEff, slope); else tpiLearnLossOnly(uEff, slope);
                         if (BUMPLESS && learnN < BUMP_LEARN_N) {   // the model now covers what the integral was compensating
                             float dlt = LossAt(target) / heatRate - base0;
@@ -345,7 +393,7 @@ class Program {
         Console.WriteLine("=== " + name + " ===");
         Console.WriteLine(note);
         var tpi = new Tpi();
-        room.gain0 = GAIN0;
+        if (GAIN0 != 0 && room.gain0 == 0) room.gain0 = GAIN0;
         var drng = new Random(7); int distSlot = -1;
         const double dtS = 3.0;
         double dtH = dtS / 3600.0;
@@ -414,7 +462,7 @@ class Program {
         Console.WriteLine("  final learned H {0:F2} L {1:F2} (L/H {2:F2}; true H {3:F2}, L at target {4:F2}, L/H {5:F2}), I {6:F3}",
             tpi.heatRate, tpi.lossRate, tpi.lossRate / tpi.heatRate, room.a, room.b * (curTarget - tout(days * 24)), room.b * (curTarget - tout(days * 24)) / room.a, tpi.integ);
         Console.WriteLine("  gain-skipped learning cycles: {0} (sun-above-target {2}), door-skipped {3}, undershoot kicks: {1}", tpi.gainSkips, tpi.lagKicks, tpi.sunSkips, tpi.doorSkips);
-        if (Tpi.WEATHER) Console.WriteLine("  weather model: kLoss {0:F4} (true b {1:F4})", tpi.kLoss, room.b);
+        if (Tpi.WEATHER) Console.WriteLine("  weather model: kLoss {0:F4} (true b {1:F4}), gain G {2:F2} (true {3:F2})", tpi.kLoss, room.b, tpi.gainG, room.gain0);
         if (Tpi.STRETCH_MAX_MIN > 0) Console.WriteLine("  stretched cycles: {0}", tpi.stretched);
         Console.WriteLine("  total starts: {0} ({1:F1}/h), learned cycles: {2}, rejected slopes: {3}, overshoot cuts: {4}",
             starts, starts / (days * 24), tpi.learnN, tpi.rejected, tpi.cutCount);
@@ -461,6 +509,9 @@ class Program {
         ev = Environment.GetEnvironmentVariable("OVER"); if (!string.IsNullOrEmpty(ev)) Tpi.TPI_OVERSHOOT = float.Parse(ev, inv);
         Tpi.NOCARRYABOVE = Environment.GetEnvironmentVariable("NOCARRYABOVE") == "1";
         Tpi.BUMPLESS = Environment.GetEnvironmentVariable("BUMPLESS") != "0";
+        Tpi.GMODEL = Environment.GetEnvironmentVariable("GMODEL") == "1";
+        ev = Environment.GetEnvironmentVariable("GLAMBDA"); if (!string.IsNullOrEmpty(ev)) Tpi.G_LAMBDA_STEADY = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("KMIN"); if (!string.IsNullOrEmpty(ev)) Tpi.K_MIN = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("BUMPMIN"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_MIN = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("BUMPN"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_LEARN_N = int.Parse(ev);
         ev = Environment.GetEnvironmentVariable("BUMPMODE"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_MODE = int.Parse(ev);
@@ -497,6 +548,14 @@ class Program {
             var nr = new Room(22, 1.8, 0.087, 15); nr.tauWaterH = 8 / 60.0;
             Run("N) Like 11 Nov: 1.8 C/h, cold night at capacity, day up to 9 C + mild sun, target 22.5", nr, 4,
                 new[] { new Seg { fromH = 0, toH = 1e9, target = 22.5f } }, h => 5.25 + 3.75 * Math.Sin(2 * Math.PI * (h - 8) / 24), "", new Win[0], tbl);
+            // M) Like 13-15 Nov: strong internal gains (neighbours) - mild sunny days need almost
+            //    no heat - then a cold front (outdoor 10 -> 0 C between 60 and 66 h)
+            SolarProfile = h => { double d = h % 24; return (h < 60 && d >= 11 && d <= 15) ? 1.0 * Math.Sin(Math.PI * (d - 11) / 4) : 0; };
+            var mr = new Room(21.5, 1.9, 0.06, 15); mr.tauWaterH = 8 / 60.0; mr.gain0 = 0.6;
+            Run("M) Internal gains 0.6 C/h, mild sunny days, cold front 10 -> 0 C at 60 h, target 21.5", mr, 5,
+                new[] { new Seg { fromH = 0, toH = 1e9, target = 21.5f } },
+                h => h < 60 ? 10 + 3 * Math.Sin(2 * Math.PI * (h - 8) / 24) : (h < 66 ? 10 - (h - 60) * 10 / 6.0 : 2 * Math.Sin(2 * Math.PI * (h - 8) / 24)),
+                "", new Win[0], tbl);
             return;
         }
         if (args.Length > 1 && args[1] == "real") {

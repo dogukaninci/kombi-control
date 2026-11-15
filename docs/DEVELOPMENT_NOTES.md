@@ -178,6 +178,31 @@ is no worse in **every** scenario, never by guessing.
   new sensor spot; check `TPI_RAD_TAU_MIN` against a few more reports before
   changing it.
 
+### 15 Nov – loss coefficient at its floor; internal-gain model tested
+- The 12 Nov fix worked: nights 12–13 Nov at target 22.0 had 3-h means of
+  21.94–22.05 (before: 22.10–22.14). 13–14 Nov days were 12–16 °C outside
+  and sunny: 22.4–23.1 °C with the boiler off.
+- 14→15 Nov night (target 21.5, outdoor ~10 °C): the boiler didn't fire for
+  ~14 h and the room stayed 21.9–22.2 — this flat barely loses heat on mild
+  nights (neighbours, insulation). Loss-only learning shrank kLoss by ~10 %
+  per cycle and it hit `K_LOSS_MIN` (0.005 → L ≈ 0.04 °C/h at target). That
+  is right for mild nights but would under-heat at the next cold spell.
+- 15 Nov 10:21 a window was opened and the temp ESP was switched off until
+  13:00 (the relay held the boiler off, as designed). The report couldn't be
+  fetched meanwhile: no ARP/ping, and the retained `/temp` on the broker was
+  the last message from before it went off (the dashboard shows retained
+  values as if live — check message flow, not the values).
+- Tested an **internal-gain term** (`GMODEL=1`: net loss = kLoss·(T − Tout) −
+  G, 3-parameter RLS, steady cycles update kLoss and G): new scenario **M**
+  (gains 0.6 °C/h, mild sunny days, cold front 10 → 0 °C) improved slightly
+  (k 0.049 / G 0.50 vs true 0.06 / 0.60; below target after the front 12 → 0
+  min/day), but without real gains it was clearly worse (A at target 55 →
+  33 %, N 38 → 23 %, G below 0 → 88 min/day) and with gains 0.4 N fell 40 →
+  12 %. A slower variant (`GLAMBDA=0.998`) was still worse (A 55 → 36 %).
+  Not adopted: k and G trade off too freely.
+- Raising the floor (`KMIN=0.02`) was neutral everywhere and helped M (below
+  target 12 → 3 min/day). Candidate for the firmware (`K_LOSS_MIN`).
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |
@@ -198,6 +223,7 @@ is no worse in **every** scenario, never by guessing.
 | Unwind a wrong-way integral 3×/5× faster (`UNWIND`) | H at target 45 → 32 % / 22 %; N above 38 → 71 / 47 min/day |
 | Above target, don't repay carried duty with catch-up burns (`NOCARRYABOVE=1`) | G at target 54 → 25 %, H 45 → 16 % |
 | Cut the burn / skip the cycle already at target + 0.25 (`OVER=0.25`, now 0.4) | H above 0 → 213 min/day; A 54 → 50 % |
+| Internal-gain term in the weather model (`GMODEL=1`, net loss = kLoss·ΔT − G) | Without real gains: A at target 55 → 33 %, N 38 → 23 %; with gains 0.4: N 40 → 12 %. Slower variant `GLAMBDA=0.998` still A 55 → 36 % |
 | Stretch the cycle at high demand so the 3-min OFF stays and ON/(ON+OFF) = demand (e.g. 17/3, 37/3 min); `STRETCH=<max min>`, `STRETCHFROM` | From 70 %, max 30 min: G at target 54 → 34 %, H 45 → 16 % (≥ 0.2 off 7 → 52 %), C starts 3.1 → 5.4/h. Milder (from 85 %, max 20 min): G 54 → 43 %, H 45 → 25 %, K 45 → 41 %. Long burns can't react to radiator lag; only the cold front (W) improved slightly |
 
 ## Facts learned about this flat
