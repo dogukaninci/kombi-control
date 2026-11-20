@@ -97,7 +97,7 @@ const char* DEVICE_ID   = "silent-hearth-681";
 // at exactly target 43 → 54 % in the flat-like scenario, cold front ≥0.2 °C off
 // 9 → 4 %, still better with the weather service 2 °C off.
 #define K_LOSS_DEFAULT        (LOSS_DEFAULT / 15.0f)  // °C/h per °C indoor−outdoor
-#define K_LOSS_MIN            0.005f
+#define K_LOSS_MIN            0.02f   // 0.005 let one mild night (flat barely cooled, 14→15 Nov) zero the loss model
 #define K_LOSS_MAX            0.4f
 #define WEATHER_INTERVAL      900000UL     // fetch every 15 min (Open-Meteo updates every 15 min)
 #define WEATHER_RETRY         120000UL     // after a failure

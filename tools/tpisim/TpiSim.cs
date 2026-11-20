@@ -68,7 +68,8 @@ class Tpi {
     public static float KP_ABOVE = 1f;                 // proportional gain multiplier while above target
     public float tout = float.NaN;           // outdoor temperature the controller knows (weather API)
     public float kLoss = LOSS_DEFAULT / 15f; // °C/h per °C of indoor−outdoor difference
-    public static float K_MIN = 0.005f; const float K_MAX = 0.4f;
+    public static float K_MIN = 0.02f;   // firmware K_LOSS_MIN
+    const float K_MAX = 0.4f;
     float[,] rlsPw = { { 4.0f, 0 }, { 0, 0.01f } };
     // Internal-gain model: net loss = kLoss·(T − tout) − gainG (people, appliances,
     // neighbours). H, kLoss and gainG share one 3×3 covariance; steady cycles update

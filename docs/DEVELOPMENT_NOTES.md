@@ -201,7 +201,9 @@ is no worse in **every** scenario, never by guessing.
   12 %. A slower variant (`GLAMBDA=0.998`) was still worse (A 55 → 36 %).
   Not adopted: k and G trade off too freely.
 - Raising the floor (`KMIN=0.02`) was neutral everywhere and helped M (below
-  target 12 → 3 min/day). Candidate for the firmware (`K_LOSS_MIN`).
+  target 12 → 3 min/day). **Adopted**: `K_LOSS_MIN` 0.005 → 0.02 (the stored
+  0.005 is below the new floor, so the first boot replaces it with the
+  default 0.033 and learning continues from there).
 
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
