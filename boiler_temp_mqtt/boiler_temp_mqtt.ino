@@ -88,6 +88,8 @@ const char* DEVICE_ID   = "silent-hearth-681";
 #define TPI_KICK_ERR          0.2f   // after a target raise, heat at once if this far below
 #define TPI_UNDERSHOOT_KICK   0.3f   // any cycle: this far below target → no skipping the min pulse
 #define TPI_GAIN_SLOPE        0.3f   // °C/h rise with the boiler off = sun/cooking, not heat loss
+#define TPI_HSAT_U            0.7f   // burns this heavy that warm the room < TPI_HSAT_SLOPE …
+#define TPI_HSAT_SLOPE        0.3f   // … °C/h are a capacity limit: H is not learned from them
 #define TPI_RAD_TAU_MIN       12.0f  // radiator lag: the learner's estimate of radiator heat
                                      // follows the boiler with this time constant (see simulation)
 
@@ -1073,6 +1075,16 @@ void tpiEndCycle() {
         } else {
           bool excited = (uAvg < 0.0f) || fabsf(uEff - uAvg) >= TPI_EXCITE;
           uAvg = (uAvg < 0.0f) ? uEff : 0.8f * uAvg + 0.2f * uEff;
+          // Capacity limit: a heavy burn that barely warms the room means the boiler
+          // (or the radiators) is at its limit, not that it got weaker. 18 Nov: target
+          // 22.5, burns of 50–100 %, room stuck at 22.2 for 3 h, H learned 1.75 → 0.88.
+          // Such cycles only update the loss. Simulation: slow radiators 42 → 55 % at
+          // target; 0.5 kept H right everywhere but made control worse and stops a
+          // genuinely weak boiler from ever learning its low H.
+          if (excited && uEff >= TPI_HSAT_U && slope < TPI_HSAT_SLOPE) {
+            excited = false;
+            Serial.printf("[TPI] u=%.2f but only %.2f°C/h — capacity limit, H kept\n", uEff, slope);
+          }
           float base0 = lossAt(target) / heatRate;   // model base duty before learning
           if (weatherValid()) {
             float d = fmaxf(1.0f, (float)(sY / sN) - outdoorT);   // mean room − outdoor

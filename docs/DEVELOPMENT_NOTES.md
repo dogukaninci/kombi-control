@@ -205,6 +205,29 @@ is no worse in **every** scenario, never by guessing.
   0.005 is below the new floor, so the first boot replaces it with the
   default 0.033 and learning continues from there).
 
+### 20 Nov – capacity limit taught "weak boiler"
+- 15–20 Nov (firmware with `K_LOSS_MIN` 0.02 since 15 Nov 13:17): 6-h means
+  within ±0.06 °C of target except sunny middays. kLoss sat at the new floor
+  (0.0202) — the floor is doing its job.
+- 18 Nov 21:27 target 22.0 → 22.5: the room rose to 22.2 in 10 min, then
+  stayed at 22.1–22.2 for 3 h while burns grew 50 → 100 %. Full RLS steps
+  read that as a weak boiler: H 1.75 → 1.50 → 1.43 → 1.25 → 1.06 → 0.88. The
+  model then over-estimated demand and the integral sat at −0.15 for days.
+  Across the whole report the room never exceeded 22.3 while burning ≥ 50 %.
+  The user confirmed the boiler is at its limit and doesn't want a higher flow
+  temperature (radiator TRVs were considered; not confirmed).
+- Fix: cycles with `u ≥ TPI_HSAT_U` (0.7) and slope < `TPI_HSAT_SLOPE` (0.3
+  °C/h) are treated as steady — loss only, H kept. Simulator (lowest H after
+  12 h / at target): H (slow radiators) 0.77 → 1.61 / 42 → 55 %, G 1.44 →
+  1.60, N 38 → 40 % (below target 68 → 60 min/day); C (weak boiler) 56 → 51 %,
+  K 47 → 44 %. Variants: threshold 0.5 kept H near true everywhere (N 1.51–
+  1.80 vs 1.8) but N below target 68 → 160 min/day and C can never learn its
+  low H; an H rate limit (3 %/step, `HRATE`) slowed drift but N below target
+  68 → 129. New options `HSATU`, `HSATSLOPE`, `HRATE`; the summary now prints
+  the lowest H after 12 h.
+- Note: in N the drifted-low H acted as a gain boost (Kp = 1/(H·1.5 h)); a
+  correct H made capacity-limited control slightly slower.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |

@@ -76,6 +76,9 @@ class Tpi {
     // only (kLoss, gainG), which day/night outdoor swings make identifiable.
     public static bool GMODEL = false;
     public static float G_LAMBDA_STEADY = 0.99f;
+    public static float H_RATE = 0f;                   // >0: H may change at most this fraction per learning step
+    public static float HSAT_U = 0.7f, HSAT_SLOPE = 0.3f;   // firmware TPI_HSAT_U / TPI_HSAT_SLOPE; // heavy burn (u ≥ HSAT_U) that barely warms the room: capacity limit, don't learn H
+    public float minH = 99f;
     public float gainG = 0f; const float G_MAX = 1.5f;
     float[,] P3 = { { 4.0f, 0, 0 }, { 0, 0.01f, 0 }, { 0, 0, 0.25f } };
     int skipCycles = 0;
@@ -151,7 +154,7 @@ class Tpi {
         float denom = RLS_LAMBDA + phi[0]*Pphi[0] + phi[1]*Pphi[1];
         float[] k = { Pphi[0]/denom, Pphi[1]/denom };
         float e = slope - (heatRate * u - kLoss * d);
-        heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX);
+        { float h0 = heatRate; heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX); if (H_RATE > 0) heatRate = Clamp(heatRate, h0 * (1 - H_RATE), h0 * (1 + H_RATE)); }
         kLoss = Clamp(kLoss + k[1]*e, K_MIN, K_MAX);
         float[,] newP = new float[2,2];
         for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++)
@@ -178,7 +181,7 @@ class Tpi {
         float[] k = { Pphi[0]/denom, Pphi[1]/denom };
         float predicted = heatRate * u - lossRate;
         float e = slope - predicted; if (ECLIP > 0) e = Clamp(e, -ECLIP, ECLIP);
-        heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX);
+        { float h0 = heatRate; heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX); if (H_RATE > 0) heatRate = Clamp(heatRate, h0 * (1 - H_RATE), h0 * (1 + H_RATE)); }
         lossRate = Clamp(lossRate + k[1]*e, LOSS_MIN, LOSS_MAX);
         float[,] newP = new float[2,2];
         for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++)
@@ -212,8 +215,9 @@ class Tpi {
                         else if (SUNSKIP && actualDuty <= 0.0f && tMean >= target + SUN_ABOVE) { gainSkips++; sunSkips++; }
                         else if (UseW) { float d = Math.Max(1f, tMean - tout);
                             if (GMODEL) { if (excited) tpiLearnG(uEff, slope, d); else tpiLearnSteadyG(uEff, slope, d); }
-                            else if (excited) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
+                            else if (excited && !(uEff >= HSAT_U && slope < HSAT_SLOPE)) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
                         else if (excited) tpiLearn(uEff, slope); else tpiLearnLossOnly(uEff, slope);
+                        if (learnN > 72) minH = Math.Min(minH, heatRate);
                         if (BUMPLESS && learnN < BUMP_LEARN_N) {   // the model now covers what the integral was compensating
                             float dlt = LossAt(target) / heatRate - base0;
                             if (BUMP_MODE == 2) integ = Clamp(integ - dlt, -TPI_I_MAX, TPI_I_MAX);   // symmetric: base+I unchanged by learning
@@ -460,6 +464,7 @@ class Program {
         }
         Console.WriteLine("  sensor after 12 h: mean offset {0:+0.000;-0.000} C, reads exactly target {1:F0}%, off by >=0.2 {2:F0}%", meanErr / Math.Max(1, settledN), 100.0 * atTarget / Math.Max(1, settledN), 100.0 * offBy2 / Math.Max(1, settledN));
         Console.WriteLine("  avg ON pulse {0:F1} min, after 12 h: RMS {1:F3} °C, {2:F0} min/day above target+0.2, {3:F0} min/day below target-0.2", starts > 0 ? onMinTotal / starts : 0, Math.Sqrt(settledSq / Math.Max(1, settledN)), aboveMin / Math.Max(0.01, (days * 24 - 12) / 24), belowMin / Math.Max(0.01, (days * 24 - 12) / 24));
+        Console.WriteLine("  lowest H after the first 12 h: {0:F2}", tpi.minH);
         Console.WriteLine("  final learned H {0:F2} L {1:F2} (L/H {2:F2}; true H {3:F2}, L at target {4:F2}, L/H {5:F2}), I {6:F3}",
             tpi.heatRate, tpi.lossRate, tpi.lossRate / tpi.heatRate, room.a, room.b * (curTarget - tout(days * 24)), room.b * (curTarget - tout(days * 24)) / room.a, tpi.integ);
         Console.WriteLine("  gain-skipped learning cycles: {0} (sun-above-target {2}), door-skipped {3}, undershoot kicks: {1}", tpi.gainSkips, tpi.lagKicks, tpi.sunSkips, tpi.doorSkips);
@@ -511,6 +516,9 @@ class Program {
         Tpi.NOCARRYABOVE = Environment.GetEnvironmentVariable("NOCARRYABOVE") == "1";
         Tpi.BUMPLESS = Environment.GetEnvironmentVariable("BUMPLESS") != "0";
         Tpi.GMODEL = Environment.GetEnvironmentVariable("GMODEL") == "1";
+        ev = Environment.GetEnvironmentVariable("HRATE"); if (!string.IsNullOrEmpty(ev)) Tpi.H_RATE = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("HSATU"); if (!string.IsNullOrEmpty(ev)) Tpi.HSAT_U = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("HSATSLOPE"); if (!string.IsNullOrEmpty(ev)) Tpi.HSAT_SLOPE = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("GLAMBDA"); if (!string.IsNullOrEmpty(ev)) Tpi.G_LAMBDA_STEADY = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("KMIN"); if (!string.IsNullOrEmpty(ev)) Tpi.K_MIN = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("BUMPMIN"); if (!string.IsNullOrEmpty(ev)) Tpi.BUMP_MIN = float.Parse(ev, inv);
