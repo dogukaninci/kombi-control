@@ -228,6 +228,51 @@ is no worse in **every** scenario, never by guessing.
 - Note: in N the drifted-low H acted as a gain boost (Kp = 1/(H·1.5 h)); a
   correct H made capacity-limited control slightly slower.
 
+### 22 Nov – what commercial and open-source thermostats do; fixed band + slow H
+- After the capacity rule (20 Nov) the night at target 22.5 was good (mean
+  22.60, H ≈ 1.9). Then 22 Nov 08:49–09:19, boiler off (u 0.31 → 0.01) and
+  the room not cooling (morning activity / walls giving back heat; solar
+  radiation was only 50–150 W/m², 75 % cloud), four full-RLS steps took H
+  1.94 → 0.76: with u ≈ 0 the regressor carries no H information, but the
+  RLS cross-covariance moved H anyway.
+- Research (sources in the 22 Nov chat):
+  - Honeywell/Secure TPI: 6 cycles/h for gas boilers (3 oil, 12 electric);
+    minimum ON 1–5 min as an installer setting. Siemens TPI "medium": min
+    switch time > 4 min, period ~12 min. → our 10-min cycle, 5/3 min fit.
+  - Optimum-start learning (Heatmiser ROC, evohome): heat-up rate adjusted in
+    small steps per heating period, not per control cycle.
+  - Versatile Thermostat (open source, on/off heaters): `on = coef_int·ΔT_in
+    + coef_ext·ΔT_out`, defaults 0.6 / 0.01 — a **fixed** internal gain (~1.7
+    K band), no integral. Its Auto TPI learns in ~48-h sessions with
+    averaging / decaying EWMA (α₀ 0.08), continuous mode α 0.04, and
+    **ignores cycles at 0 % and 100 % power** ("no exploitable
+    information"); undersized heating is flagged, not learned.
+  - SAT (open source, OpenTherm/on-off): PID with outdoor heating curve,
+    3–4 PWM cycles/h for radiators, freezes the integral during solar gain.
+  - tado weather adaptation uses solar intensity from online weather data;
+    Nest Sunblock corrects a sensor in direct sun; Nest True Radiant /
+    evohome stop early for radiator lag. Siemens: no TRVs in the reference
+    room with the room sensor.
+- Adopted: **fixed proportional band `TPI_BAND_K` 2 K** (Kp 0.5, was
+  1/(H·1.5 h)) and **H changes ≤ 2 % per step** (`TPI_H_RATE`). Simulator,
+  % at exactly target (above/below min/day): B 40 → 42 (above 304 → 216), C
+  51 → 57, E 18 → 31 (above 390 → 94), F 26 → 31, S 23 → 28, M 34 → 36, A/G/K
+  same, H 55 → 52, W 52 → 50, N 40 → 37 (below 60 → 146: on capacity-limited
+  evenings the old drifted-low H acted as a gain boost), and **D (8 °C/h
+  boiler, fast radiators) above target 437 → 773 min/day**: a fixed 2 K band
+  is too sharp for a very powerful boiler; such a system needs a much wider
+  `TPI_BAND_K`. "Band as a floor" (`BANDMAX`, Kp = 1/max(band, H·1.5 h)) and
+  faster upward H (`HRATEUP` 0.10) only partly fixed D (620 / 547) and gave
+  back the gains in B, E, F. Learned H stays near
+  the start/true value everywhere (N 1.60 vs true 1.8 instead of 0.76).
+- Tested and not adopted: band 1.67 K (H 55 → 45 %), band 2.5 K, ignoring H
+  in cycles with u < 0.15/0.25 (`HLOWU`, neutral to worse), solar-radiation
+  learning gate at 250 W/m² (`SUNGATE`, neutral — the free-heat rule already
+  catches the sunny cycles, and the two real H drops had little sun).
+- Open-Meteo `current=shortwave_radiation` works over plain http if a
+  solar input is needed later. Hourly values are means over the preceding
+  hour.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |

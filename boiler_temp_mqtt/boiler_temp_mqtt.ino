@@ -9,7 +9,7 @@
           duty = L/H + Kp·(target − T) + I
           H  = learned heating rate  (°C/h at 100 % boiler)
           L  = learned heat-loss rate (°C/h at 0 % boiler)
-          Kp = 1 / (H · TPI_HORIZON_H)
+          Kp = 1 / TPI_BAND_K (fixed proportional band, like commercial TPI)
           I  = slow integral correction
         H and L are re-estimated after every complete cycle with
         recursive least squares (forgetting factor) from the
@@ -62,7 +62,13 @@ const char* DEVICE_ID   = "silent-hearth-681";
 // simulation; 6+ min ON makes powerful boilers swing ±0.5 °C.
 #define TPI_MIN_ON_MS      300000UL  // ON pulse shorter than this → carried over
 #define TPI_MIN_OFF_MS     180000UL  // OFF gap shorter than this → stays ON
-#define TPI_HORIZON_H         1.5f   // aim to close the error in ~1.5 h
+#define TPI_BAND_K            2.0f   // fixed proportional band: full output 2 K below target.
+                                     // Was Kp = 1/(H·1.5 h): a wrongly learned H then also changed
+                                     // how hard the controller reacted. Commercial TPI (Honeywell,
+                                     // Versatile Thermostat coef_int 0.6 ≈ 1.7 K) use a fixed band.
+#define TPI_H_RATE            0.02f  // H may change at most 2 % per learning step: real changes take
+                                     // days (like VTherm Auto TPI's slow EWMA), one sunny morning or
+                                     // capacity-limited evening can no longer halve it (18 + 22 Nov)
 #define TPI_TI_H              2.0f   // integral time constant (4 h left the room ~0.1 °C off
                                      // for hours; 1 h oscillated with slow radiators — simulation)
 #define TPI_I_MAX             0.15f  // integral clamp (± duty); 0.25 let a night's windup overheat the next day
@@ -894,7 +900,7 @@ void doorDetect() {
 // ============================================================
 // TPI — self-learning time-proportional control
 // ============================================================
-float tpiKp() { return 1.0f / (heatRate * TPI_HORIZON_H); }
+float tpiKp() { return 1.0f / TPI_BAND_K; }
 
 // Duty the model asks for at the current temperature (0..1)
 float tpiComputeDuty() {
@@ -964,7 +970,9 @@ void tpiLearn(float u, float slope) {
   float predicted = heatRate * u - lossRate;
   float e = slope - predicted;
 
-  heatRate = constrain(heatRate + k[0] * e, HEAT_MIN, HEAT_MAX);
+  { float h0 = heatRate;   // slow: at most ±TPI_H_RATE per step
+    heatRate = constrain(heatRate + k[0] * e, HEAT_MIN, HEAT_MAX);
+    heatRate = constrain(heatRate, h0 * (1.0f - TPI_H_RATE), h0 * (1.0f + TPI_H_RATE)); }
   lossRate = constrain(lossRate + k[1] * e, LOSS_MIN, LOSS_MAX);
 
   // P = (P − k·φᵀ·P) / λ
@@ -1002,7 +1010,9 @@ void tpiLearnW(float u, float slope, float d) {
   float k[2]  = { Pphi[0] / denom, Pphi[1] / denom };
   float e = slope - (heatRate * u - kLoss * d);
 
-  heatRate = constrain(heatRate + k[0] * e, HEAT_MIN, HEAT_MAX);
+  { float h0 = heatRate;   // slow: at most ±TPI_H_RATE per step
+    heatRate = constrain(heatRate + k[0] * e, HEAT_MIN, HEAT_MAX);
+    heatRate = constrain(heatRate, h0 * (1.0f - TPI_H_RATE), h0 * (1.0f + TPI_H_RATE)); }
   kLoss    = constrain(kLoss    + k[1] * e, K_LOSS_MIN, K_LOSS_MAX);
   lossRate = constrain(kLoss * d, LOSS_MIN, LOSS_MAX);   // flat-L fallback stays current
 

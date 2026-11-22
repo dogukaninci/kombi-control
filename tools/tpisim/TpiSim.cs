@@ -76,8 +76,11 @@ class Tpi {
     // only (kLoss, gainG), which day/night outdoor swings make identifiable.
     public static bool GMODEL = false;
     public static float G_LAMBDA_STEADY = 0.99f;
-    public static float H_RATE = 0f;                   // >0: H may change at most this fraction per learning step
+    public static float H_RATE = 0.02f;                // firmware TPI_H_RATE (0 = unlimited)
     public static float HSAT_U = 0.7f, HSAT_SLOPE = 0.3f;   // firmware TPI_HSAT_U / TPI_HSAT_SLOPE; // heavy burn (u ≥ HSAT_U) that barely warms the room: capacity limit, don't learn H
+    public static float HLOW_U = 0f;                   // cycles with u below this carry no H information: loss only
+    public static float SUNGATE = 0f;                  // >0: no learning while the weather service reports ≥ this solar radiation (W/m²)
+    public float sunWm2 = 0f;
     public float minH = 99f;
     public float gainG = 0f; const float G_MAX = 1.5f;
     float[,] P3 = { { 4.0f, 0, 0 }, { 0, 0.01f, 0 }, { 0, 0, 0.25f } };
@@ -127,7 +130,10 @@ class Tpi {
 
     static float Clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-    public float tpiKp() { return 1.0f / (heatRate * TPI_HORIZON_H); }
+    public static float BAND_K = 2.0f;                // firmware TPI_BAND_K (0 = old Kp = 1/(H·horizon))
+    public static bool BAND_MAX = false;               // Kp = 1/max(BAND_K, H·horizon): band is a floor, powerful boilers get gentler
+    public static float H_RATE_UP = 0f;                // >0: separate (faster) limit for H going up
+    public float tpiKp() { return BAND_K > 0 ? (BAND_MAX ? 1.0f / Math.Max(BAND_K, heatRate * TPI_HORIZON_H) : 1.0f / BAND_K) : 1.0f / (heatRate * TPI_HORIZON_H); }
 
     float tpiComputeDuty() {
         float err = target - temperature;
@@ -154,7 +160,7 @@ class Tpi {
         float denom = RLS_LAMBDA + phi[0]*Pphi[0] + phi[1]*Pphi[1];
         float[] k = { Pphi[0]/denom, Pphi[1]/denom };
         float e = slope - (heatRate * u - kLoss * d);
-        { float h0 = heatRate; heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX); if (H_RATE > 0) heatRate = Clamp(heatRate, h0 * (1 - H_RATE), h0 * (1 + H_RATE)); }
+        { float h0 = heatRate; heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX); if (H_RATE > 0) heatRate = Clamp(heatRate, h0 * (1 - H_RATE), h0 * (1 + (H_RATE_UP > 0 ? H_RATE_UP : H_RATE))); }
         kLoss = Clamp(kLoss + k[1]*e, K_MIN, K_MAX);
         float[,] newP = new float[2,2];
         for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++)
@@ -181,7 +187,7 @@ class Tpi {
         float[] k = { Pphi[0]/denom, Pphi[1]/denom };
         float predicted = heatRate * u - lossRate;
         float e = slope - predicted; if (ECLIP > 0) e = Clamp(e, -ECLIP, ECLIP);
-        { float h0 = heatRate; heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX); if (H_RATE > 0) heatRate = Clamp(heatRate, h0 * (1 - H_RATE), h0 * (1 + H_RATE)); }
+        { float h0 = heatRate; heatRate = Clamp(heatRate + k[0]*e, HEAT_MIN, HEAT_MAX); if (H_RATE > 0) heatRate = Clamp(heatRate, h0 * (1 - H_RATE), h0 * (1 + (H_RATE_UP > 0 ? H_RATE_UP : H_RATE))); }
         lossRate = Clamp(lossRate + k[1]*e, LOSS_MIN, LOSS_MAX);
         float[,] newP = new float[2,2];
         for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++)
@@ -213,9 +219,10 @@ class Tpi {
                         if (SKIPCUT && cycleCut) { gainSkips++; }
                         else if (GAINFIX && slope > 0.3f + heatRate * uEff && (GAINRULE == 1 ? actualDuty <= 0.0f : (LAG_TAU_MIN > 0 ? uEff < 0.1f : uEff <= 0.0f))) { gainSkips++; }
                         else if (SUNSKIP && actualDuty <= 0.0f && tMean >= target + SUN_ABOVE) { gainSkips++; sunSkips++; }
+                        else if (SUNGATE > 0 && sunWm2 >= SUNGATE) { gainSkips++; sunSkips++; }
                         else if (UseW) { float d = Math.Max(1f, tMean - tout);
                             if (GMODEL) { if (excited) tpiLearnG(uEff, slope, d); else tpiLearnSteadyG(uEff, slope, d); }
-                            else if (excited && !(uEff >= HSAT_U && slope < HSAT_SLOPE)) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
+                            else if (excited && !(uEff >= HSAT_U && slope < HSAT_SLOPE) && uEff >= HLOW_U) tpiLearnW(uEff, slope, d); else tpiLearnLossOnlyW(uEff, slope, d); }
                         else if (excited) tpiLearn(uEff, slope); else tpiLearnLossOnly(uEff, slope);
                         if (learnN > 72) minH = Math.Min(minH, heatRate);
                         if (BUMPLESS && learnN < BUMP_LEARN_N) {   // the model now covers what the integral was compensating
@@ -418,6 +425,7 @@ class Program {
             }
             tpi.target = curTarget;
             room.solar = SolarProfile(hours);
+            { double hd = hours % 24, dl = (hd >= 7 && hd <= 17) ? Math.Sin(Math.PI * (hd - 7) / 10) : 0; tpi.sunWm2 = (float)(80 * dl + Math.Min(450, 250 * room.solar)); }   // weather-service radiation proxy
             if (DIST > 0 && (int)(hours * 2) != distSlot) { distSlot = (int)(hours * 2); double u1 = 1.0 - drng.NextDouble(), u2 = drng.NextDouble(); room.dist = DIST * Math.Sqrt(-2 * Math.Log(u1)) * Math.Cos(2 * Math.PI * u2); }
             // Window events
             room.windowLoss = 0; Win active = null;
@@ -518,6 +526,11 @@ class Program {
         Tpi.GMODEL = Environment.GetEnvironmentVariable("GMODEL") == "1";
         ev = Environment.GetEnvironmentVariable("HRATE"); if (!string.IsNullOrEmpty(ev)) Tpi.H_RATE = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("HSATU"); if (!string.IsNullOrEmpty(ev)) Tpi.HSAT_U = float.Parse(ev, inv);
+        Tpi.BAND_MAX = Environment.GetEnvironmentVariable("BANDMAX") == "1";
+        ev = Environment.GetEnvironmentVariable("HRATEUP"); if (!string.IsNullOrEmpty(ev)) Tpi.H_RATE_UP = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("BAND"); if (!string.IsNullOrEmpty(ev)) Tpi.BAND_K = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("SUNGATE"); if (!string.IsNullOrEmpty(ev)) Tpi.SUNGATE = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("HLOWU"); if (!string.IsNullOrEmpty(ev)) Tpi.HLOW_U = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("HSATSLOPE"); if (!string.IsNullOrEmpty(ev)) Tpi.HSAT_SLOPE = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("GLAMBDA"); if (!string.IsNullOrEmpty(ev)) Tpi.G_LAMBDA_STEADY = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("KMIN"); if (!string.IsNullOrEmpty(ev)) Tpi.K_MIN = float.Parse(ev, inv);
