@@ -66,6 +66,10 @@ const char* DEVICE_ID   = "silent-hearth-681";
                                      // Was Kp = 1/(H·1.5 h): a wrongly learned H then also changed
                                      // how hard the controller reacted. Commercial TPI (Honeywell,
                                      // Versatile Thermostat coef_int 0.6 ≈ 1.7 K) use a fixed band.
+#define TPI_KD                0.3f   // derivative brake: duty −= 0.3 h × last cycle's slope (°C/h) …
+#define TPI_KD_NEAR           0.3f   // … only within ±0.3 °C of target, so recovery from far below
+                                     // (target raise, window) isn't slowed. Simulation, 26-Nov-like
+                                     // morning: above/below target 224/130 → 186/52 min/day
 #define TPI_H_RATE            0.02f  // H may change at most 2 % per learning step: real changes take
                                      // days (like VTherm Auto TPI's slow EWMA), one sunny morning or
                                      // capacity-limited evening can no longer halve it (18 + 22 Nov)
@@ -299,6 +303,7 @@ float         cycleStartTemp = 0.0f;   // for the diagnostics log
 bool          cycleCut       = false;  // overshoot guard fired this cycle
 bool          tpiKick        = false;  // user just raised the target
 float         uAvg           = -1.0f;  // running average of learning duty (<0 = unset)
+float         lastSlope      = 0.0f;   // °C/h over the last complete cycle (derivative brake)
 double        sX = 0, sY = 0, sXX = 0, sXY = 0;  // slope regression sums
 uint16_t      sN = 0;
 // Radiator heat estimate (0–1): the boiler state through a first-order lag.
@@ -909,6 +914,10 @@ float tpiComputeDuty() {
   if (err <= -TPI_OVERSHOOT)         return 0.0f;
   float base = lossAt(target) / heatRate;    // duty that holds temperature steady
   float duty = base + tpiKp() * err + integ;
+  // Derivative brake near target: a room still rising (radiator heat, morning
+  // activity, sun) gets less, a room falling gets more. 26 Nov: the room went
+  // 22.0 → 22.5 at +0.9 °C/h and the boiler kept burning at 22.2–22.3.
+  if (fabsf(err) < TPI_KD_NEAR) duty -= TPI_KD * lastSlope;
   return constrain(duty, 0.0f, 1.0f);
 }
 
@@ -953,6 +962,7 @@ void tpiAbortWith(uint8_t reason) {
     cycleLog(actual, NAN, CF_ABORTED | reason | (cycleCut ? CF_CUT : 0));
   }
   cycleActive   = false;
+  lastSlope     = 0.0f;     // stale after a target change, door or mode change
   skipLearnNext = true;
   dutyCarry     = 0.0f;
 }
@@ -1064,6 +1074,11 @@ void tpiEndCycle() {
   float actualDuty = (float)min(cycleOnMs, TPI_CYCLE_MS) / (float)TPI_CYCLE_MS;
   float slope = NAN;
   uint8_t flags = cycleCut ? CF_CUT : 0;
+  // Slope of this cycle for the derivative brake (needed even when not learning)
+  if (sN >= TPI_MIN_SAMPLES) {
+    double dd = sN * sXX - sX * sX;
+    if (dd > 1e-9) lastSlope = (float)((sN * sXY - sX * sY) / dd);
+  }
 
   if (cycleLearnable && sN >= TPI_MIN_SAMPLES) {
     double den = sN * sXX - sX * sX;

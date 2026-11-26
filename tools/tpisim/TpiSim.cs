@@ -82,6 +82,8 @@ class Tpi {
     public static float SUNGATE = 0f;                  // >0: no learning while the weather service reports ≥ this solar radiation (W/m²)
     public float sunWm2 = 0f;
     public float minH = 99f;
+    public static float KD = 0.3f, KD_NEAR = 0.3f;    // firmware TPI_KD / TPI_KD_NEAR
+    public static bool KD_POSONLY = false; float lastSlope = 0f;   // duty −= KD·(°C/h of the last cycle)
     public float gainG = 0f; const float G_MAX = 1.5f;
     float[,] P3 = { { 4.0f, 0, 0 }, { 0, 0.01f, 0 }, { 0, 0, 0.25f } };
     int skipCycles = 0;
@@ -142,10 +144,11 @@ class Tpi {
         if (LAGPRED && LAG_TAU_MIN > 0) err -= (float)(PRED_GAIN * heatRate * rHat * LAG_TAU_MIN / 60.0);
         float b = Math.Max(0f, LossAt(target)) / heatRate;   // free heat can't be "removed"
         float duty = b + tpiKp() * err * (err < 0 ? KP_ABOVE : 1f) + integ;
+        if (KD > 0 && (KD_NEAR <= 0 || Math.Abs(err) < KD_NEAR)) duty -= KD * (KD_POSONLY ? Math.Max(0f, lastSlope) : lastSlope);   // derivative on last cycle's slope
         return Clamp(duty, 0.0f, 1.0f);
     }
 
-    public void tpiAbort() { LagUpdate(millis); lastOn = false; cycleActive = false; skipLearnNext = true; dutyCarry = 0; }
+    public void tpiAbort() { LagUpdate(millis); lastOn = false; cycleActive = false; skipLearnNext = true; dutyCarry = 0; lastSlope = 0; }
 
     void tpiLearnLossOnlyW(float u, float slope, float d) {
         float e = slope - (heatRate * u - kLoss * d);
@@ -203,6 +206,7 @@ class Tpi {
     void tpiEndCycle() {
         ulong per = Math.Max(1UL, Math.Min(cyclePeriodMs, millis - cycleStartMs));
         float actualDuty = (float)Math.Min(cycleOnMs, per) / (float)per;
+if (sN >= TPI_MIN_SAMPLES) { double dd = sN * sXX - sX * sX; if (dd > 1e-9) lastSlope = (float)((sN * sXY - sX * sY) / dd); }   // for the D term
         if (cycleLearnable && sN >= TPI_MIN_SAMPLES) {
             double den = sN * sXX - sX * sX;
             if (den > 1e-9) {
@@ -528,6 +532,9 @@ class Program {
         ev = Environment.GetEnvironmentVariable("HSATU"); if (!string.IsNullOrEmpty(ev)) Tpi.HSAT_U = float.Parse(ev, inv);
         Tpi.BAND_MAX = Environment.GetEnvironmentVariable("BANDMAX") == "1";
         ev = Environment.GetEnvironmentVariable("HRATEUP"); if (!string.IsNullOrEmpty(ev)) Tpi.H_RATE_UP = float.Parse(ev, inv);
+        ev = Environment.GetEnvironmentVariable("KD"); if (!string.IsNullOrEmpty(ev)) Tpi.KD = float.Parse(ev, inv);
+        Tpi.KD_POSONLY = Environment.GetEnvironmentVariable("KDPOS") == "1";
+        ev = Environment.GetEnvironmentVariable("KDNEAR"); if (!string.IsNullOrEmpty(ev)) Tpi.KD_NEAR = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("BAND"); if (!string.IsNullOrEmpty(ev)) Tpi.BAND_K = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("SUNGATE"); if (!string.IsNullOrEmpty(ev)) Tpi.SUNGATE = float.Parse(ev, inv);
         ev = Environment.GetEnvironmentVariable("HLOWU"); if (!string.IsNullOrEmpty(ev)) Tpi.HLOW_U = float.Parse(ev, inv);
@@ -578,6 +585,13 @@ class Program {
                 new[] { new Seg { fromH = 0, toH = 1e9, target = 21.5f } },
                 h => h < 60 ? 10 + 3 * Math.Sin(2 * Math.PI * (h - 8) / 24) : (h < 66 ? 10 - (h - 60) * 10 / 6.0 : 2 * Math.Sin(2 * Math.PI * (h - 8) / 24)),
                 "", new Win[0], tbl);
+            // Q) Like 26 Nov: cold nights (outdoor -3 C at 05 h, +5 C at 17 h), morning activity
+            //    (+0.6 C/h 07:30-09:30: showers, cooking, people) then sun 10-14 h, target 22
+            SolarProfile = h => { double d = h % 24; double g = (d >= 7.5 && d <= 9.5) ? 0.6 : 0; if (d >= 10 && d <= 14) g += Math.Sin(Math.PI * (d - 10) / 4); return g; };
+            var qr = new Room(22, 1.9, 0.055, 15); qr.tauWaterH = 8 / 60.0; qr.gain0 = 0.2;
+            Run("Q) Like 26 Nov: cold nights to -3 C, morning activity then sun, target 22", qr, 4,
+                new[] { new Seg { fromH = 0, toH = 1e9, target = 22f } },
+                h => 1 - 4 * Math.Cos(2 * Math.PI * (h - 5) / 24), "", new Win[0], tbl);
             return;
         }
         if (args.Length > 1 && args[1] == "real") {

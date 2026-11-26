@@ -273,6 +273,36 @@ is no worse in **every** scenario, never by guessing.
   solar input is needed later. Hourly values are means over the preceding
   hour.
 
+### 26 Nov – morning overshoot: derivative brake
+- Fixed band + slow H since 22 Nov (kp 0.5000 confirmed). The user ran
+  `manual_on` on the evenings of 24 and 25 Nov.
+- Night 25→26 Nov: outdoor 0 → −3.2 °C. kLoss had sat at the 0.02 floor
+  after mild days, so the base was too low; the room held 21.8–21.9 against
+  22.0 while the integral climbed −0.14 → +0.14 and loss-only learning took
+  L 0.43 → 1.2 — the same shortfall corrected twice again (bumpless transfer
+  is only active in the first 72 cycles).
+- 08:25–09:15 the room rose 21.9 → 22.5 at up to +0.9 °C/h (morning
+  activity, outdoor warming), but the request stayed 63–83 % (base ~0.6 +
+  I 0.14, P only −0.1 at +0.2 °C): burns at 22.2 and 22.3, the overshoot cut
+  stopped the 09:05 one at 22.4. Then sun took the room to 22.9.
+- New scenario **Q** (`extra`): nights to −3 °C, morning activity +0.6 °C/h
+  07:30–09:30, sun 10–14 h, internal gains 0.2, lag 8+15 min. It reproduces
+  the morning peaks (22.5–22.6) and evening dips (21.6).
+- Adopted: **derivative brake near target** (`TPI_KD` 0.3 h,
+  `TPI_KD_NEAR` 0.3 °C): duty −= 0.3 × last cycle's slope when |error| <
+  0.3. Simulator vs. 22-Nov firmware (above/below min/day; % at target): Q
+  224/130 → 186/52, H 52 → 57 %, K below 56 → 0, W 50 → 54 %, E above 94 →
+  42, S above 485 → 441; N below 146 → 170, A 55 → 52 %, B 42 → 39 %, E 31 →
+  26 %. On the real morning it would have skipped the 08:55 and 09:05 burns.
+- Tested: KD 0.2 / 0.3 everywhere (slower recovery after target raises and
+  windows: B below 29 → 61, E below 203 → 319), KD only for rising rooms
+  (`KDPOS`, Q below 130 → 161), KD 0.4 near target (K below 0 → 144),
+  bumpless with a 0.05 deadband always on (`BUMPMIN`, neutral). Options
+  `KD`, `KDNEAR`, `KDPOS`.
+- Still open: kLoss collapses to the floor on mild days and the integral
+  then has to carry cold nights; H drifts down slowly in Q-like mornings
+  (free heat during moderate burns), now bounded by the 2 % step limit.
+
 ## Rejected ideas (tested, worse – don't retry without a new reason)
 
 | Idea | Result in the simulator |
